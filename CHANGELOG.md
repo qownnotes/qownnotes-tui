@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared devenv and `just` configuration from `pbek/nix-shared`.
 - Cross-platform CI for Linux, macOS, and Windows.
 
+### Fixed
+
+- Rust 1.85 CI builds by pinning `ignore` to its last MSRV-compatible release.
+- Dependency-audit CI permissions by running `cargo audit` directly.
+- Removed the vulnerable `time` dependency previously pulled in by log rotation.
+
 ### Security
 
 - QOwnNotes configuration databases are opened read-only.

@@ -8,7 +8,7 @@ mod notes;
 mod terminal;
 mod ui;
 
-use std::panic;
+use std::{fs::OpenOptions, panic, sync::Mutex};
 
 use anyhow::Context;
 use clap::Parser;
@@ -20,7 +20,7 @@ use tracing_subscriber::EnvFilter;
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = Config::load(&cli)?;
-    let _log_guard = init_logging();
+    init_logging();
 
     tracing::info!(
         notes_dir = %config.note_folders[config.active_folder].path.display(),
@@ -32,24 +32,27 @@ fn main() -> anyhow::Result<()> {
     app::run(terminal, config)
 }
 
-fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let dirs = ProjectDirs::from("org", "QOwnNotes", "qownnotes-tui")?;
+fn init_logging() {
+    let Some(dirs) = ProjectDirs::from("org", "QOwnNotes", "qownnotes-tui") else {
+        return;
+    };
     if std::fs::create_dir_all(dirs.state_dir().unwrap_or_else(|| dirs.data_local_dir())).is_err() {
-        return None;
+        return;
     }
-    let writer = tracing_appender::rolling::daily(
-        dirs.state_dir().unwrap_or_else(|| dirs.data_local_dir()),
-        "qownnotes-tui.log",
-    );
-    let (writer, guard) = tracing_appender::non_blocking(writer);
-    tracing_subscriber::fmt()
+    let path = dirs
+        .state_dir()
+        .unwrap_or_else(|| dirs.data_local_dir())
+        .join("qownnotes-tui.log");
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_ansi(false)
-        .with_writer(writer)
-        .init();
-    Some(guard)
+        .with_writer(Mutex::new(file))
+        .try_init();
 }
 
 fn install_panic_hook() {

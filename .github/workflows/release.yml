@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -33,6 +34,7 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.platform }})
@@ -86,10 +88,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Read release notes from changelog
+        env:
+          RELEASE_VERSION: ${{ needs.release-info.outputs.version }}
+        shell: bash
+        run: |
+          awk -v heading="## [$RELEASE_VERSION]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && (/^## / || /^\[/) { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > release-notes.md
+          if [[ ! -s release-notes.md ]]; then
+            echo "CHANGELOG.md section for $RELEASE_VERSION is empty or missing" >&2
+            exit 1
+          fi
       - name: Create checksums
         working-directory: release-assets
         run: sha256sum qownnotes-tui-* > SHA256SUMS
@@ -108,9 +126,9 @@ jobs:
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
               --draft \
-              --generate-notes \
+              --notes-file release-notes.md \
               --title "$RELEASE_TAG" \
               --verify-tag
           fi
           gh release upload "$RELEASE_TAG" release-assets/* --clobber
-          gh release edit "$RELEASE_TAG" --draft=false
+          gh release edit "$RELEASE_TAG" --draft=false --notes-file release-notes.md

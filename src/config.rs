@@ -1,4 +1,7 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, bail};
 use directories::{BaseDirs, ProjectDirs};
@@ -31,6 +34,8 @@ pub enum NoteSort {
 #[serde(deny_unknown_fields)]
 struct FileConfig {
     notes_dir: Option<PathBuf>,
+    #[serde(default)]
+    selected_note_folder: Option<PathBuf>,
     #[serde(default = "default_save_interval_seconds")]
     save_interval_seconds: u64,
 }
@@ -39,6 +44,7 @@ impl Default for FileConfig {
     fn default() -> Self {
         Self {
             notes_dir: None,
+            selected_note_folder: None,
             save_interval_seconds: default_save_interval_seconds(),
         }
     }
@@ -57,7 +63,7 @@ impl Config {
             .map_or(NoteSort::LastModified, |settings| {
                 note_sort_from_qsettings(&settings)
             });
-        if let Some(notes_dir) = cli.notes_dir.clone().or(file.notes_dir) {
+        if let Some(notes_dir) = cli.notes_dir.clone().or(file.notes_dir.clone()) {
             let path = notes_dir
                 .canonicalize()
                 .with_context(|| format!("cannot access note root {}", notes_dir.display()))?;
@@ -77,11 +83,16 @@ impl Config {
             });
         }
 
-        let (note_folders, active_folder) = discover_qownnotes_note_folders().context(
+        let (note_folders, qownnotes_active_folder) = discover_qownnotes_note_folders().context(
             "no note root configured; pass --notes-dir PATH, set \
              QOWNNOTES_TUI_NOTES_DIR, add notes_dir to the configuration file, \
              or configure a note folder in QOwnNotes",
         )?;
+        let active_folder = selected_folder_index(
+            &note_folders,
+            file.selected_note_folder.as_deref(),
+            qownnotes_active_folder,
+        );
         Ok(Self {
             note_folders,
             active_folder,
@@ -91,15 +102,39 @@ impl Config {
     }
 }
 
+fn selected_folder_index(
+    note_folders: &[NoteFolder],
+    selected: Option<&Path>,
+    fallback: usize,
+) -> usize {
+    selected
+        .and_then(|selected| {
+            note_folders
+                .iter()
+                .position(|folder| folder.path == selected)
+        })
+        .unwrap_or(fallback)
+}
+
 pub fn save_interval_seconds(value: u64) -> anyhow::Result<()> {
-    let path = config_path().context("cannot determine configuration directory")?;
     let mut file = load_file()?;
     file.save_interval_seconds = value.max(1);
+    save_file(&file)
+}
+
+pub fn selected_note_folder(value: &Path) -> anyhow::Result<()> {
+    let mut file = load_file()?;
+    file.selected_note_folder = Some(value.to_path_buf());
+    save_file(&file)
+}
+
+fn save_file(file: &FileConfig) -> anyhow::Result<()> {
+    let path = config_path().context("cannot determine configuration directory")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
-    let contents = toml::to_string_pretty(&file).context("cannot serialize configuration")?;
+    let contents = toml::to_string_pretty(file).context("cannot serialize configuration")?;
     fs::write(&path, contents).with_context(|| format!("cannot write {}", path.display()))
 }
 
@@ -305,5 +340,40 @@ mod tests {
             NoteSort::LastModified
         );
         assert_eq!(note_sort_from_qsettings(""), NoteSort::LastModified);
+    }
+
+    #[test]
+    fn reads_the_selected_note_folder_from_the_app_config() {
+        let file: FileConfig =
+            toml::from_str("selected_note_folder = '/notes/work'\nsave_interval_seconds = 10\n")
+                .unwrap();
+
+        assert_eq!(
+            file.selected_note_folder,
+            Some(PathBuf::from("/notes/work"))
+        );
+    }
+
+    #[test]
+    fn prefers_the_saved_note_folder_when_it_is_available() {
+        let folders = vec![
+            NoteFolder {
+                name: "First".into(),
+                path: "/notes/first".into(),
+            },
+            NoteFolder {
+                name: "Saved".into(),
+                path: "/notes/saved".into(),
+            },
+        ];
+
+        assert_eq!(
+            selected_folder_index(&folders, Some(Path::new("/notes/saved")), 0),
+            1
+        );
+        assert_eq!(
+            selected_folder_index(&folders, Some(Path::new("/notes/missing")), 0),
+            0
+        );
     }
 }

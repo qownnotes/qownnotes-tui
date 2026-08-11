@@ -119,6 +119,9 @@ impl App {
                     self.note_folders[folder].name,
                     self.notes.len()
                 );
+                if !self.notes.is_empty() {
+                    self.load_selected_note();
+                }
             }
             Err(error) => self.status = error,
         }
@@ -414,6 +417,9 @@ impl App {
                 self.current_note = None;
                 self.viewer_scroll = 0;
                 self.start_scan(scans);
+                if let Err(error) = config::selected_note_folder(self.root()) {
+                    self.status = format!("Unable to remember note folder: {error:#}");
+                }
             }
             self.pane = Pane::Notes;
             return;
@@ -722,6 +728,32 @@ mod tests {
         assert_eq!(app.selected_note, 1);
         assert_eq!(app.content, "second");
         assert_eq!(app.current_note.as_deref(), Some(Path::new("second.md")));
+        assert_eq!(app.pane, Pane::Notes);
+    }
+
+    #[test]
+    fn completed_scan_loads_the_first_note_into_the_preview() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "previewed").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        let notes = vec![Note {
+            relative_path: "note.md".into(),
+            size: 9,
+            modified: SystemTime::UNIX_EPOCH,
+        }];
+
+        app.scan_finished(0, Ok(notes));
+
+        assert_eq!(app.content, "previewed");
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("note.md")));
         assert_eq!(app.pane, Pane::Notes);
     }
 

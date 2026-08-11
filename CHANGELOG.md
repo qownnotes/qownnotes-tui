@@ -5,17 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ### Added
-
-- Markdown syntax highlighting while editing notes.
 
 ## [0.2.0] - 2026-08-11
 
 ### Added
 
 - In-app multiline note editing from the viewer with `e`.
+- Markdown syntax highlighting while editing notes.
+- Automatic preview of the first note when a note folder is loaded.
+- Persistence of the selected note folder between app launches.
 - Automatic note saving with a configurable interval of 10 seconds by default.
 - A Settings dialog with a General tab for changing the note save interval.
 - Automatic viewer reload when the current note changes outside the app.

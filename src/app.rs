@@ -160,7 +160,7 @@ impl App {
                 ) {
                     self.selected_note = index;
                     self.pane = Pane::Notes;
-                    self.open_selection(scans);
+                    self.load_selected_note();
                 }
             }
             MouseEventKind::ScrollUp => self.handle_mouse_scroll(mouse, -3),
@@ -190,6 +190,7 @@ impl App {
             }
             Pane::Notes => {
                 self.selected_note = move_index(self.selected_note, self.notes.len(), delta);
+                self.load_selected_note();
             }
             Pane::Viewer => self.scroll_viewer(delta),
         }
@@ -218,6 +219,12 @@ impl App {
         if self.pane != Pane::Notes {
             return;
         }
+        if self.load_selected_note() {
+            self.pane = Pane::Viewer;
+        }
+    }
+
+    fn load_selected_note(&mut self) -> bool {
         let path = self
             .notes
             .get(self.selected_note)
@@ -229,7 +236,7 @@ impl App {
                     self.current_note = Some(path.clone());
                     self.viewer_scroll = 0;
                     self.status = path.display().to_string();
-                    self.pane = Pane::Viewer;
+                    return true;
                 }
                 Err(error) => {
                     self.content.clear();
@@ -238,6 +245,7 @@ impl App {
                 }
             }
         }
+        false
     }
 
     fn start_scan(&mut self, scans: &Sender<ScanResult>) {
@@ -336,7 +344,9 @@ fn sort_notes(notes: &mut [Note], sort: NoteSort) {
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
         path::Path,
+        sync::mpsc,
         time::{Duration, SystemTime},
     };
 
@@ -346,7 +356,7 @@ mod tests {
     };
     use ratatui::layout::Rect;
 
-    use super::{App, list_item_at, move_index, sort_notes};
+    use super::{App, Pane, list_item_at, move_index, sort_notes};
 
     #[test]
     fn selection_stays_in_bounds() {
@@ -374,6 +384,65 @@ mod tests {
         assert_eq!(app.viewer_scroll, 10);
         app.scroll_viewer(-20);
         assert_eq!(app.viewer_scroll, 0);
+    }
+
+    #[test]
+    fn navigating_notes_loads_content_without_moving_focus() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.md"), "first").unwrap();
+        fs::write(root.path().join("second.md"), "second").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+        });
+        app.notes = vec![
+            Note {
+                relative_path: "first.md".into(),
+                size: 5,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+            Note {
+                relative_path: "second.md".into(),
+                size: 6,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+        ];
+
+        app.move_selection(1);
+
+        assert_eq!(app.selected_note, 1);
+        assert_eq!(app.content, "second");
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("second.md")));
+        assert_eq!(app.pane, Pane::Notes);
+    }
+
+    #[test]
+    fn enter_on_note_moves_focus_to_viewer() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "content").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+        });
+        app.notes.push(Note {
+            relative_path: "note.md".into(),
+            size: 7,
+            modified: SystemTime::UNIX_EPOCH,
+        });
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.open_selection(&scan_tx);
+
+        assert_eq!(app.content, "content");
+        assert_eq!(app.pane, Pane::Viewer);
     }
 
     #[test]

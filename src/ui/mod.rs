@@ -107,7 +107,7 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     let text = if app.current_note.is_some() {
         markdown::highlight(&app.content)
     } else {
-        "Select a note and press Enter to open it.".into()
+        "Select a note to preview it.".into()
     };
     let paragraph = Paragraph::new(text)
         .block(pane_block("Viewer", app.pane == Pane::Viewer))
@@ -166,7 +166,7 @@ fn draw_help(frame: &mut Frame) {
              Home / End  first or last viewer line\n\
              h / l       move between panes\n\
              Tab         next pane\n\
-             Enter       activate note folder or open note\n\
+             Enter       activate note folder or focus viewer\n\
              Mouse       activate items or scroll panes\n\
              R           reload active note folder\n\
              ?           toggle this help\n\

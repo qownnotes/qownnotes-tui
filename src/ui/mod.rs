@@ -164,7 +164,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     frame.render_widget(
-        Paragraph::new(app.content.as_str())
+        Paragraph::new(markdown::highlight(&app.content))
             .block(pane_block("Editor", true))
             .scroll((app.editor_scroll, app.editor_horizontal_scroll)),
         area,

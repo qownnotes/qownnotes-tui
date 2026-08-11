@@ -35,7 +35,7 @@ opened read-only.
 | `Home`, `End`        | Jump to the start or end of the note  |
 | `h`, `l`, `Tab`      | Switch panes                          |
 | `Enter`              | Activate a note folder or open a note |
-| `e`                  | Edit the note in the viewer           |
+| `e`                  | Edit the selected note                |
 | `Ctrl-s`, `Esc`      | Save the note                         |
 | `Ctrl-r`             | Discard edits and reload from disk    |
 | `s`                  | Open settings                         |

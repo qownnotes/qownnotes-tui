@@ -155,7 +155,10 @@ impl App {
             }
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('s') => self.show_settings = true,
-            KeyCode::Char('e') if self.pane == Pane::Viewer && self.current_note.is_some() => {
+            KeyCode::Char('e')
+                if matches!(self.pane, Pane::Notes | Pane::Viewer)
+                    && self.current_note.is_some() =>
+            {
                 self.editing = true;
                 self.editor_cursor = self.content.len();
                 self.editor_scroll = 0;
@@ -781,6 +784,37 @@ mod tests {
 
         assert_eq!(app.content, "content");
         assert_eq!(app.pane, Pane::Viewer);
+    }
+
+    #[test]
+    fn e_on_note_list_opens_the_editor() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "content").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.notes.push(Note {
+            relative_path: "note.md".into(),
+            size: 7,
+            modified: SystemTime::UNIX_EPOCH,
+        });
+        app.load_selected_note();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+            &scan_tx,
+        );
+
+        assert!(app.editing);
+        assert_eq!(app.editor_cursor, app.content.len());
+        assert_eq!(app.pane, Pane::Notes);
     }
 
     #[test]

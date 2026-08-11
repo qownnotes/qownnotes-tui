@@ -185,7 +185,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         " scanning "
     } else if app.editing {
         " Ctrl-s save  Ctrl-r discard/reload  Esc save/close "
-    } else if app.pane == Pane::Viewer {
+    } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
         " e edit  j/k scroll  s settings  ? help  q quit "
     } else {
         " s settings  ? help  R reload  q quit "
@@ -212,7 +212,7 @@ fn draw_help(frame: &mut Frame) {
              Tab         next pane\n\
              Enter       activate note folder or focus viewer\n\
              Mouse       activate items or scroll panes\n\
-             e           edit the note from the viewer\n\
+             e           edit the selected note\n\
              s           open settings\n\
              Ctrl-s      save while editing\n\
              Ctrl-r      discard edits and reload from disk\n\

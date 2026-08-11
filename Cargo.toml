@@ -1,0 +1,30 @@
+[package]
+name = "qownnotes-tui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A keyboard-first terminal browser for QOwnNotes-compatible note folders"
+license = "GPL-2.0-only"
+repository = "https://github.com/qownnotes/qownnotes-tui"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+crossterm = "0.29"
+directories = "6.0"
+ignore = "0.4"
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+toml = "0.9"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.20"
+
+[profile.release]
+lto = "thin"
+strip = true

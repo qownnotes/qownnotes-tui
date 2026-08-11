@@ -39,6 +39,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.show_help {
         draw_help(frame);
     }
+    if app.show_settings {
+        draw_settings(frame, app);
+    }
 }
 
 fn draw_narrow(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -104,6 +107,10 @@ fn draw_notes(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     app.viewer_area = area;
+    if app.editing {
+        draw_editor(frame, app, area);
+        return;
+    }
     let text = if app.current_note.is_some() {
         markdown::highlight(&app.content)
     } else {
@@ -137,14 +144,51 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
+    let viewport_width = area.width.saturating_sub(2).max(1);
+    let viewport_height = area.height.saturating_sub(2).max(1);
+    let before_cursor = &app.content[..app.editor_cursor];
+    let cursor_line = before_cursor.bytes().filter(|byte| *byte == b'\n').count() as u16;
+    let line_start = before_cursor.rfind('\n').map_or(0, |index| index + 1);
+    let cursor_column = app.content[line_start..app.editor_cursor].chars().count() as u16;
+
+    if cursor_line < app.editor_scroll {
+        app.editor_scroll = cursor_line;
+    } else if cursor_line >= app.editor_scroll.saturating_add(viewport_height) {
+        app.editor_scroll = cursor_line.saturating_sub(viewport_height - 1);
+    }
+    if cursor_column < app.editor_horizontal_scroll {
+        app.editor_horizontal_scroll = cursor_column;
+    } else if cursor_column >= app.editor_horizontal_scroll.saturating_add(viewport_width) {
+        app.editor_horizontal_scroll = cursor_column.saturating_sub(viewport_width - 1);
+    }
+
+    frame.render_widget(
+        Paragraph::new(app.content.as_str())
+            .block(pane_block("Editor", true))
+            .scroll((app.editor_scroll, app.editor_horizontal_scroll)),
+        area,
+    );
+    frame.set_cursor_position((
+        area.x + 1 + cursor_column.saturating_sub(app.editor_horizontal_scroll),
+        area.y + 1 + cursor_line.saturating_sub(app.editor_scroll),
+    ));
+}
+
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let mode = format!(" {:?} ", app.pane);
+    let mode = if app.editing {
+        " Edit ".into()
+    } else {
+        format!(" {:?} ", app.pane)
+    };
     let help = if app.loading {
         " scanning "
+    } else if app.editing {
+        " Ctrl-s save  Ctrl-r discard/reload  Esc save/close "
     } else if app.pane == Pane::Viewer {
-        " j/k scroll  PgUp/PgDn page  ? help  q quit "
+        " e edit  j/k scroll  s settings  ? help  q quit "
     } else {
-        " ? help  R reload  q quit "
+        " s settings  ? help  R reload  q quit "
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -168,14 +212,62 @@ fn draw_help(frame: &mut Frame) {
              Tab         next pane\n\
              Enter       activate note folder or focus viewer\n\
              Mouse       activate items or scroll panes\n\
+             e           edit the note from the viewer\n\
+             s           open settings\n\
+             Ctrl-s      save while editing\n\
+             Ctrl-r      discard edits and reload from disk\n\
+             Esc         save and leave the editor\n\
              R           reload active note folder\n\
              ?           toggle this help\n\
-             q / Ctrl-c  quit\n\n\
-             The application is read-only.",
+             q / Ctrl-c  quit",
         )
         .block(Block::default().title(" Help ").borders(Borders::ALL))
         .wrap(Wrap { trim: false }),
         area,
+    );
+}
+
+fn draw_settings(frame: &mut Frame, app: &App) {
+    let area = centered_rect(54, 11, frame.area());
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Settings ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [tabs, body, footer] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    frame.render_widget(
+        Paragraph::new(" General ").style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        tabs,
+    );
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from("Note autosave interval"),
+            Line::from(vec![
+                Span::raw("Seconds: "),
+                Span::styled(
+                    format!(" {} ", app.settings_interval),
+                    Style::default().fg(Color::Black).bg(Color::White),
+                ),
+            ]),
+        ]),
+        body,
+    );
+    frame.render_widget(
+        Paragraph::new("Enter save  Up/Down adjust  Esc cancel")
+            .style(Style::default().fg(Color::DarkGray)),
+        footer,
     );
 }
 

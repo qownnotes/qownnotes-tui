@@ -1,8 +1,7 @@
 # qownnotes-tui
 
-`qownnotes-tui` is a keyboard-first terminal browser for local,
-QOwnNotes-compatible Markdown note folders. The current implementation is the
-read-only first slice described in [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+`qownnotes-tui` is a keyboard-first terminal browser and editor for local,
+QOwnNotes-compatible Markdown note folders.
 See [`CHANGELOG.md`](CHANGELOG.md) for notable changes.
 
 ## Run
@@ -36,15 +35,21 @@ opened read-only.
 | `Home`, `End`        | Jump to the start or end of the note  |
 | `h`, `l`, `Tab`      | Switch panes                          |
 | `Enter`              | Activate a note folder or open a note |
+| `e`                  | Edit the note in the viewer           |
+| `Ctrl-s`, `Esc`      | Save the note                         |
+| `Ctrl-r`             | Discard edits and reload from disk    |
+| `s`                  | Open settings                         |
 | `R`                  | Rescan the active note folder         |
 | `?`                  | Show help                             |
 | `q`, `Ctrl-c`        | Quit                                  |
 
-The viewer soft-wraps and syntax-highlights Markdown without modifying note
-content. Note folders and notes can also be activated with the left mouse
+The viewer soft-wraps and syntax-highlights Markdown. Notes automatically save
+at the interval configured in Settings > General (10 seconds by default), and
+clean notes reload when their files change outside the app. Note folders and
+notes can also be activated with the left mouse
 button, and the mouse wheel scrolls lists or the viewer. The note list follows
 QOwnNotes' configured alphabetical or last-change sorting. The application does
-not modify notes in this milestone.
+detects conflicting external edits before writing a modified note.
 
 ## Development
 

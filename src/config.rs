@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, bail};
 use directories::{BaseDirs, ProjectDirs};
 use rusqlite::{Connection, OpenFlags};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
 
@@ -12,6 +12,7 @@ pub struct Config {
     pub note_folders: Vec<NoteFolder>,
     pub active_folder: usize,
     pub note_sort: NoteSort,
+    pub save_interval_seconds: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,15 +27,31 @@ pub enum NoteSort {
     Alphabetical { descending: bool },
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct FileConfig {
     notes_dir: Option<PathBuf>,
+    #[serde(default = "default_save_interval_seconds")]
+    save_interval_seconds: u64,
+}
+
+impl Default for FileConfig {
+    fn default() -> Self {
+        Self {
+            notes_dir: None,
+            save_interval_seconds: default_save_interval_seconds(),
+        }
+    }
+}
+
+const fn default_save_interval_seconds() -> u64 {
+    10
 }
 
 impl Config {
     pub fn load(cli: &Cli) -> anyhow::Result<Self> {
         let file = load_file()?;
+        let save_interval_seconds = file.save_interval_seconds.max(1);
         let note_sort = qownnotes_settings_path()
             .and_then(|path| fs::read_to_string(path).ok())
             .map_or(NoteSort::LastModified, |settings| {
@@ -56,6 +73,7 @@ impl Config {
                 note_folders: vec![NoteFolder { name, path }],
                 active_folder: 0,
                 note_sort,
+                save_interval_seconds,
             });
         }
 
@@ -68,8 +86,21 @@ impl Config {
             note_folders,
             active_folder,
             note_sort,
+            save_interval_seconds,
         })
     }
+}
+
+pub fn save_interval_seconds(value: u64) -> anyhow::Result<()> {
+    let path = config_path().context("cannot determine configuration directory")?;
+    let mut file = load_file()?;
+    file.save_interval_seconds = value.max(1);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    let contents = toml::to_string_pretty(&file).context("cannot serialize configuration")?;
+    fs::write(&path, contents).with_context(|| format!("cannot write {}", path.display()))
 }
 
 fn discover_qownnotes_note_folders() -> Option<(Vec<NoteFolder>, usize)> {
@@ -176,16 +207,23 @@ fn qsettings_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn load_file() -> anyhow::Result<FileConfig> {
-    let Some(dirs) = ProjectDirs::from("org", "QOwnNotes", "qownnotes-tui") else {
+    let Some(path) = config_path() else {
         return Ok(FileConfig::default());
     };
-    let path = dirs.config_dir().join("config.toml");
     match fs::read_to_string(&path) {
         Ok(contents) => toml::from_str(&contents)
             .with_context(|| format!("invalid configuration file {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FileConfig::default()),
         Err(error) => Err(error).with_context(|| format!("cannot read {}", path.display())),
     }
+}
+
+fn config_path() -> Option<PathBuf> {
+    Some(
+        ProjectDirs::from("org", "QOwnNotes", "qownnotes-tui")?
+            .config_dir()
+            .join("config.toml"),
+    )
 }
 
 #[cfg(test)]

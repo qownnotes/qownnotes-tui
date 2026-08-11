@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-11
+
+### Added
+
+- In-app multiline note editing from the viewer with `e`.
+- Automatic note saving with a configurable interval of 10 seconds by default.
+- A Settings dialog with a General tab for changing the note save interval.
+- Automatic viewer reload when the current note changes outside the app.
+- Conflict detection that prevents autosave from overwriting external changes.
+
+## [0.1.0]
+
 ### Added
 
 - Read-only terminal browser for QOwnNotes-compatible Markdown folders.
@@ -44,4 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reserved `.git`, `media`, `attachments`, and `trash` directories are excluded
   from note discovery.
 
-[Unreleased]: https://github.com/qownnotes/qownnotes-tui/commits/main
+[Unreleased]: https://github.com/qownnotes/qownnotes-tui/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/qownnotes/qownnotes-tui/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/qownnotes/qownnotes-tui/releases/tag/v0.1.0

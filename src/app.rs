@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Sender},
     thread,
+    time::{Duration, Instant},
 };
 
 use crossterm::event::{
@@ -11,7 +12,7 @@ use crossterm::event::{
 use ratatui::layout::Rect;
 
 use crate::{
-    config::{Config, NoteFolder, NoteSort},
+    config::{self, Config, NoteFolder, NoteSort},
     error::NoteReadError,
     event::{Event, Events, ScanResult},
     notes::{model::Note, scan},
@@ -36,17 +37,28 @@ pub struct App {
     pub pane: Pane,
     pub content: String,
     pub current_note: Option<PathBuf>,
+    pub editing: bool,
+    pub editor_cursor: usize,
+    pub editor_scroll: u16,
+    pub editor_horizontal_scroll: u16,
     pub viewer_scroll: u16,
     pub viewer_max_scroll: u16,
     pub viewer_page_size: u16,
     pub status: String,
     pub loading: bool,
     pub show_help: bool,
+    pub show_settings: bool,
+    pub settings_interval: String,
     pub folder_area: Rect,
     pub notes_area: Rect,
     pub viewer_area: Rect,
     pub folder_list_offset: usize,
     pub note_list_offset: usize,
+    persisted_content: String,
+    dirty: bool,
+    dirty_since: Option<Instant>,
+    external_conflict: bool,
+    save_interval: Duration,
     should_quit: bool,
 }
 
@@ -62,17 +74,28 @@ impl App {
             pane: Pane::Notes,
             content: String::new(),
             current_note: None,
+            editing: false,
+            editor_cursor: 0,
+            editor_scroll: 0,
+            editor_horizontal_scroll: 0,
             viewer_scroll: 0,
             viewer_max_scroll: 0,
             viewer_page_size: 1,
             status: "Scanning notes...".into(),
             loading: true,
             show_help: false,
+            show_settings: false,
+            settings_interval: config.save_interval_seconds.to_string(),
             folder_area: Rect::default(),
             notes_area: Rect::default(),
             viewer_area: Rect::default(),
             folder_list_offset: 0,
             note_list_offset: 0,
+            persisted_content: String::new(),
+            dirty: false,
+            dirty_since: None,
+            external_conflict: false,
+            save_interval: Duration::from_secs(config.save_interval_seconds.max(1)),
             should_quit: false,
         }
     }
@@ -109,13 +132,33 @@ impl App {
             self.show_help = false;
             return;
         }
+        if self.show_settings {
+            self.handle_settings_key(key);
+            return;
+        }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.should_quit = true;
+            self.save_note();
+            self.should_quit = !self.dirty;
+            return;
+        }
+        if self.editing {
+            self.handle_editor_key(key);
             return;
         }
         match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('q') => {
+                self.save_note();
+                self.should_quit = true;
+            }
             KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Char('s') => self.show_settings = true,
+            KeyCode::Char('e') if self.pane == Pane::Viewer && self.current_note.is_some() => {
+                self.editing = true;
+                self.editor_cursor = self.content.len();
+                self.editor_scroll = 0;
+                self.editor_horizontal_scroll = 0;
+                self.status = "Editing note".into();
+            }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
             KeyCode::PageDown => self.scroll_viewer(self.viewer_page_size as isize),
@@ -132,7 +175,166 @@ impl App {
         }
     }
 
+    fn handle_editor_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.save_note();
+            return;
+        }
+        if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.reload_note();
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.save_note();
+                if !self.dirty {
+                    self.editing = false;
+                    self.status = self
+                        .current_note
+                        .as_ref()
+                        .map_or_else(String::new, |path| path.display().to_string());
+                }
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.content.insert(self.editor_cursor, character);
+                self.editor_cursor += character.len_utf8();
+                self.mark_dirty();
+            }
+            KeyCode::Enter => {
+                self.content.insert(self.editor_cursor, '\n');
+                self.editor_cursor += 1;
+                self.mark_dirty();
+            }
+            KeyCode::Tab => {
+                self.content.insert_str(self.editor_cursor, "    ");
+                self.editor_cursor += 4;
+                self.mark_dirty();
+            }
+            KeyCode::Backspace if self.editor_cursor > 0 => {
+                let previous = previous_boundary(&self.content, self.editor_cursor);
+                self.content.drain(previous..self.editor_cursor);
+                self.editor_cursor = previous;
+                self.mark_dirty();
+            }
+            KeyCode::Delete if self.editor_cursor < self.content.len() => {
+                let next = next_boundary(&self.content, self.editor_cursor);
+                self.content.drain(self.editor_cursor..next);
+                self.mark_dirty();
+            }
+            KeyCode::Left => {
+                self.editor_cursor = previous_boundary(&self.content, self.editor_cursor)
+            }
+            KeyCode::Right => self.editor_cursor = next_boundary(&self.content, self.editor_cursor),
+            KeyCode::Up => self.move_editor_vertical(-1),
+            KeyCode::Down => self.move_editor_vertical(1),
+            KeyCode::Home => {
+                self.editor_cursor = self.content[..self.editor_cursor]
+                    .rfind('\n')
+                    .map_or(0, |index| index + 1);
+            }
+            KeyCode::End => {
+                self.editor_cursor += self.content[self.editor_cursor..]
+                    .find('\n')
+                    .unwrap_or(self.content.len() - self.editor_cursor);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_settings_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.show_settings = false;
+                self.settings_interval = self.save_interval.as_secs().to_string();
+            }
+            KeyCode::Enter => {
+                let Some(value) = self
+                    .settings_interval
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|value| *value > 0)
+                else {
+                    self.status = "Save interval must be at least 1 second".into();
+                    return;
+                };
+                match config::save_interval_seconds(value) {
+                    Ok(()) => {
+                        self.save_interval = Duration::from_secs(value);
+                        self.show_settings = false;
+                        self.status = format!("Save interval set to {value} seconds");
+                    }
+                    Err(error) => self.status = format!("Unable to save settings: {error:#}"),
+                }
+            }
+            KeyCode::Char(character) if character.is_ascii_digit() => {
+                if self.settings_interval == "0" {
+                    self.settings_interval.clear();
+                }
+                self.settings_interval.push(character);
+            }
+            KeyCode::Backspace => {
+                self.settings_interval.pop();
+            }
+            KeyCode::Up => self.adjust_interval(1),
+            KeyCode::Down => self.adjust_interval(-1),
+            _ => {}
+        }
+    }
+
+    fn adjust_interval(&mut self, delta: i64) {
+        let current = self.settings_interval.parse::<u64>().unwrap_or(1);
+        self.settings_interval = if delta > 0 {
+            current.saturating_add(delta as u64)
+        } else {
+            current.saturating_sub(delta.unsigned_abs()).max(1)
+        }
+        .to_string();
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = self.content != self.persisted_content;
+        if self.dirty {
+            self.dirty_since.get_or_insert_with(Instant::now);
+            self.status = "Modified".into();
+        } else {
+            self.dirty_since = None;
+        }
+    }
+
+    fn move_editor_vertical(&mut self, delta: isize) {
+        let before = &self.content[..self.editor_cursor];
+        let line_start = before.rfind('\n').map_or(0, |index| index + 1);
+        let column = self.content[line_start..self.editor_cursor].chars().count();
+        let target_start = if delta < 0 {
+            if line_start == 0 {
+                return;
+            }
+            self.content[..line_start - 1]
+                .rfind('\n')
+                .map_or(0, |index| index + 1)
+        } else {
+            let Some(next) = self.content[self.editor_cursor..].find('\n') else {
+                return;
+            };
+            self.editor_cursor + next + 1
+        };
+        let target_end = self.content[target_start..]
+            .find('\n')
+            .map_or(self.content.len(), |index| target_start + index);
+        self.editor_cursor = self.content[target_start..target_end]
+            .char_indices()
+            .nth(column)
+            .map_or(target_end, |(offset, _)| target_start + offset);
+    }
+
     fn handle_mouse(&mut self, mouse: MouseEvent, scans: &Sender<ScanResult>) {
+        if self.editing || self.show_settings {
+            return;
+        }
         if self.show_help {
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                 self.show_help = false;
@@ -232,8 +434,12 @@ impl App {
         if let Some(path) = path {
             match read_note(self.root(), &path) {
                 Ok(content) => {
-                    self.content = content;
+                    self.content = content.clone();
+                    self.persisted_content = content;
                     self.current_note = Some(path.clone());
+                    self.dirty = false;
+                    self.dirty_since = None;
+                    self.external_conflict = false;
                     self.viewer_scroll = 0;
                     self.status = path.display().to_string();
                     return true;
@@ -252,6 +458,87 @@ impl App {
         self.loading = true;
         self.status = format!("Scanning {}...", self.note_folders[self.active_folder].name);
         spawn_scan(self.active_folder, self.root().to_path_buf(), scans.clone());
+    }
+
+    fn tick(&mut self) {
+        self.check_external_change();
+        if self.dirty
+            && self
+                .dirty_since
+                .is_some_and(|since| since.elapsed() >= self.save_interval)
+        {
+            self.save_note();
+        }
+    }
+
+    fn check_external_change(&mut self) {
+        let Some(relative) = self.current_note.clone() else {
+            return;
+        };
+        match read_note(self.root(), &relative) {
+            Ok(disk_content) if disk_content != self.persisted_content => {
+                if self.dirty {
+                    self.external_conflict = true;
+                    self.status =
+                        "Note changed outside the app; Esc cannot save until resolved".into();
+                } else {
+                    self.content = disk_content.clone();
+                    self.persisted_content = disk_content;
+                    self.editor_cursor = self.editor_cursor.min(self.content.len());
+                    while !self.content.is_char_boundary(self.editor_cursor) {
+                        self.editor_cursor -= 1;
+                    }
+                    self.viewer_scroll = 0;
+                    self.status = format!("Reloaded {} after external change", relative.display());
+                }
+            }
+            Ok(_) => self.external_conflict = false,
+            Err(error) => {
+                self.external_conflict = true;
+                self.status = format!("Note changed outside the app: {error}");
+            }
+        }
+    }
+
+    fn save_note(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        self.check_external_change();
+        if self.external_conflict {
+            return;
+        }
+        let Some(relative) = self.current_note.clone() else {
+            return;
+        };
+        let path = self.root().join(&relative);
+        match fs::write(&path, self.content.as_bytes()) {
+            Ok(()) => {
+                self.persisted_content.clone_from(&self.content);
+                self.dirty = false;
+                self.dirty_since = None;
+                self.status = format!("Saved {}", relative.display());
+            }
+            Err(error) => self.status = format!("Unable to save {}: {error}", relative.display()),
+        }
+    }
+
+    fn reload_note(&mut self) {
+        let Some(relative) = self.current_note.clone() else {
+            return;
+        };
+        match read_note(self.root(), &relative) {
+            Ok(content) => {
+                self.content = content.clone();
+                self.persisted_content = content;
+                self.editor_cursor = self.content.len();
+                self.dirty = false;
+                self.dirty_since = None;
+                self.external_conflict = false;
+                self.status = format!("Reloaded {}; local edits discarded", relative.display());
+            }
+            Err(error) => self.status = error.to_string(),
+        }
     }
 
     fn next_pane(&mut self) {
@@ -283,7 +570,8 @@ pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
             Event::Key(key) => app.handle_key(key, &scan_tx),
             Event::Mouse(mouse) => app.handle_mouse(mouse, &scan_tx),
             Event::ScanFinished((folder, result)) => app.scan_finished(folder, result),
-            Event::Resize | Event::Tick => {}
+            Event::Tick => app.tick(),
+            Event::Resize => {}
         }
     }
     Ok(())
@@ -302,6 +590,20 @@ fn read_note(root: &Path, relative: &Path) -> Result<String, NoteReadError> {
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
     String::from_utf8(bytes.to_vec())
         .map_err(|_| NoteReadError::InvalidUtf8(relative.to_path_buf()))
+}
+
+fn previous_boundary(content: &str, cursor: usize) -> usize {
+    content[..cursor]
+        .char_indices()
+        .next_back()
+        .map_or(0, |(index, _)| index)
+}
+
+fn next_boundary(content: &str, cursor: usize) -> usize {
+    content[cursor..]
+        .chars()
+        .next()
+        .map_or(cursor, |character| cursor + character.len_utf8())
 }
 
 fn move_index(current: usize, count: usize, delta: isize) -> usize {
@@ -354,6 +656,7 @@ mod tests {
         config::{Config, NoteFolder, NoteSort},
         notes::model::Note,
     };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
 
     use super::{App, Pane, list_item_at, move_index, sort_notes};
@@ -375,6 +678,7 @@ mod tests {
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
         });
         app.viewer_max_scroll = 10;
 
@@ -398,6 +702,7 @@ mod tests {
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
         });
         app.notes = vec![
             Note {
@@ -431,6 +736,7 @@ mod tests {
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -443,6 +749,98 @@ mod tests {
 
         assert_eq!(app.content, "content");
         assert_eq!(app.pane, Pane::Viewer);
+    }
+
+    #[test]
+    fn editor_changes_and_saves_a_note() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "content").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.notes.push(Note {
+            relative_path: "note.md".into(),
+            size: 7,
+            modified: SystemTime::UNIX_EPOCH,
+        });
+        app.load_selected_note();
+        app.editing = true;
+        app.editor_cursor = app.content.len();
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        app.save_note();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join("note.md")).unwrap(),
+            "content!"
+        );
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn reloads_an_unmodified_note_changed_outside_the_app() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "original").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.notes.push(Note {
+            relative_path: "note.md".into(),
+            size: 8,
+            modified: SystemTime::UNIX_EPOCH,
+        });
+        app.load_selected_note();
+        fs::write(root.path().join("note.md"), "external").unwrap();
+
+        app.check_external_change();
+
+        assert_eq!(app.content, "external");
+        assert!(!app.external_conflict);
+    }
+
+    #[test]
+    fn does_not_overwrite_an_external_change_with_dirty_content() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "original").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.notes.push(Note {
+            relative_path: "note.md".into(),
+            size: 8,
+            modified: SystemTime::UNIX_EPOCH,
+        });
+        app.load_selected_note();
+        app.content.push_str(" local");
+        app.mark_dirty();
+        fs::write(root.path().join("note.md"), "external").unwrap();
+
+        app.save_note();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join("note.md")).unwrap(),
+            "external"
+        );
+        assert!(app.dirty);
+        assert!(app.external_conflict);
     }
 
     #[test]

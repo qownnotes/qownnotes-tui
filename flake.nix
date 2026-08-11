@@ -1,5 +1,5 @@
 {
-  description = "qownnotes-tui: a read-only QOwnNotes terminal browser";
+  description = "qownnotes-tui: a QOwnNotes terminal browser and editor";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -25,7 +25,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         package = pkgs.rustPlatform.buildRustPackage {
           pname = "qownnotes-tui";
-          version = "0.1.0";
+          version = "0.2.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [

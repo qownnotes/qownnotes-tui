@@ -35,6 +35,7 @@ opened read-only.
 | `Home`, `End`           | Jump to the start or end of the note    |
 | `h`, `l`, `Tab`         | Switch panes                            |
 | `Enter`                 | Activate a note folder or open a note   |
+| `n`, `Ctrl-n`           | Create a timestamped note               |
 | `e`                     | Edit the selected note                  |
 | `/`                     | Search note names and text              |
 | `Ctrl-s`, `Esc`         | Save the note                           |
@@ -49,12 +50,14 @@ opened read-only.
 Search terms are case-insensitive and all terms must match; use quotes to search
 for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The
 viewer soft-wraps and syntax-highlights Markdown. Notes automatically save
-at the interval configured in Settings > General (10 seconds by default), and
-clean notes reload when their files change outside the app. Note folders and
-notes can also be activated with the left mouse
-button, and the mouse wheel scrolls lists or the viewer. The note list follows
-QOwnNotes' configured alphabetical or last-change sorting. The application does
-detects conflicting external edits before writing a modified note.
+at the interval configured in Settings > General (10 seconds by default). New
+notes start with a `# Note YYYY-MM-DD HHhMMsSS` heading. On save, note filenames
+automatically follow the first meaningful content line; conflicting filenames
+receive a numeric suffix. Clean notes reload when their files change outside
+the app. Note folders and notes can also be activated with the left mouse button,
+and the mouse wheel scrolls lists or the viewer. The note list follows QOwnNotes'
+configured alphabetical or last-change sorting. The application detects
+conflicting external edits before writing a modified note.
 
 ## Development
 

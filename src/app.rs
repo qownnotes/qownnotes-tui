@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::Local;
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -15,7 +16,7 @@ use crate::{
     config::{self, Config, NoteFolder, NoteSort},
     error::NoteReadError,
     event::{Event, Events, ScanResult},
-    notes::{model::Note, scan},
+    notes::{model::Note, naming, scan},
     terminal::TerminalGuard,
     ui,
 };
@@ -166,6 +167,7 @@ impl App {
             }
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('s') => self.show_settings = true,
+            KeyCode::Char('n') => self.create_note(),
             KeyCode::Char('/') => {
                 self.searching = true;
                 self.pane = Pane::Notes;
@@ -572,6 +574,57 @@ impl App {
         spawn_scan(self.active_folder, self.root().to_path_buf(), scans.clone());
     }
 
+    fn create_note(&mut self) {
+        let title = naming::new_note_title(Local::now().naive_local());
+        let relative = PathBuf::from(format!("{title}.md"));
+        let path = self.root().join(&relative);
+        let content = naming::initial_content(&title);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                if let Err(error) = file.write_all(content.as_bytes()) {
+                    let _ = fs::remove_file(&path);
+                    self.status = format!("Unable to create {}: {error}", relative.display());
+                    return;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                self.status = format!("Unable to create {}: {error}", relative.display());
+                return;
+            }
+        }
+
+        self.search_query.clear();
+        self.searching = false;
+        match scan::scan(self.root()) {
+            Ok(mut notes) => {
+                sort_notes(&mut notes, self.note_sort);
+                self.all_notes = notes;
+                self.notes = self.all_notes.clone();
+                self.selected_note = self
+                    .notes
+                    .iter()
+                    .position(|note| note.relative_path == relative)
+                    .unwrap_or(0);
+                self.note_list_offset = 0;
+                if self.load_selected_note() {
+                    self.pane = Pane::Viewer;
+                    self.editing = true;
+                    self.editor_cursor = self.content.len();
+                    self.editor_scroll = 0;
+                    self.editor_horizontal_scroll = 0;
+                    self.status = format!("Created {}", relative.display());
+                }
+            }
+            Err(error) => self.status = format!("Unable to refresh notes: {error:#}"),
+        }
+    }
+
     fn tick(&mut self) {
         self.check_external_change();
         if self.dirty
@@ -624,17 +677,66 @@ impl App {
         let Some(relative) = self.current_note.clone() else {
             return;
         };
-        let path = self.root().join(&relative);
+        let renamed = naming::automatic_relative_path(self.root(), &relative, &self.content);
+        if renamed != relative
+            && let Err(error) = fs::rename(self.root().join(&relative), self.root().join(&renamed))
+        {
+            self.status = format!(
+                "Unable to rename {} to {}: {error}",
+                relative.display(),
+                renamed.display()
+            );
+            return;
+        }
+        let path = self.root().join(&renamed);
         match fs::write(&path, self.content.as_bytes()) {
             Ok(()) => {
                 self.persisted_content.clone_from(&self.content);
-                self.update_search_text(&relative);
                 self.dirty = false;
                 self.dirty_since = None;
-                self.status = format!("Saved {}", relative.display());
+                self.current_note = Some(renamed.clone());
+                self.update_note_after_save(&relative, &renamed);
+                self.status = format!("Saved {}", renamed.display());
             }
-            Err(error) => self.status = format!("Unable to save {}: {error}", relative.display()),
+            Err(error) => {
+                if renamed != relative {
+                    let _ = fs::rename(&path, self.root().join(&relative));
+                }
+                self.status = format!("Unable to save {}: {error}", renamed.display());
+            }
         }
+    }
+
+    fn update_note_after_save(&mut self, previous: &Path, current: &Path) {
+        let Ok(metadata) = fs::metadata(self.root().join(current)) else {
+            return;
+        };
+        let search_text: std::sync::Arc<str> = self.persisted_content.to_lowercase().into();
+        for note in self
+            .all_notes
+            .iter_mut()
+            .filter(|note| note.relative_path == previous)
+        {
+            note.relative_path = current.to_path_buf();
+            note.size = metadata.len();
+            note.modified = metadata
+                .modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            note.search_text_lowercase = search_text.clone();
+        }
+        sort_notes(&mut self.all_notes, self.note_sort);
+        let terms = search_terms(&self.search_query);
+        self.notes = self
+            .all_notes
+            .iter()
+            .filter(|note| note.matches_search(&terms))
+            .cloned()
+            .collect();
+        self.selected_note = self
+            .notes
+            .iter()
+            .position(|note| note.relative_path == current)
+            .unwrap_or_else(|| self.selected_note.min(self.notes.len().saturating_sub(1)));
     }
 
     fn reload_note(&mut self) {
@@ -1060,10 +1162,74 @@ mod tests {
         app.save_note();
 
         assert_eq!(
-            fs::read_to_string(root.path().join("note.md")).unwrap(),
+            fs::read_to_string(root.path().join("content!.md")).unwrap(),
             "content!"
         );
+        assert!(!root.path().join("note.md").exists());
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("content!.md")));
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn creates_a_timestamped_note_and_opens_it_for_editing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+
+        app.create_note();
+
+        let relative = app.current_note.as_ref().unwrap();
+        let filename = relative.file_name().unwrap().to_string_lossy();
+        assert!(filename.starts_with("Note "));
+        assert!(filename.ends_with(".md"));
+        assert_eq!(
+            app.content,
+            fs::read_to_string(root.path().join(relative)).unwrap()
+        );
+        assert!(app.content.starts_with("# Note "));
+        assert!(app.content.ends_with("\n\n"));
+        assert!(app.editing);
+        assert_eq!(app.pane, Pane::Viewer);
+    }
+
+    #[test]
+    fn automatic_rename_adds_a_collision_suffix() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("old.md"), "# Old\n").unwrap();
+        fs::write(root.path().join("Project.md"), "existing").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.selected_note = app
+            .notes
+            .iter()
+            .position(|note| note.relative_path == Path::new("old.md"))
+            .unwrap();
+        app.load_selected_note();
+        app.content = "# Project\nbody".into();
+        app.mark_dirty();
+
+        app.save_note();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join("Project 1.md")).unwrap(),
+            "# Project\nbody"
+        );
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("Project 1.md")));
     }
 
     #[test]

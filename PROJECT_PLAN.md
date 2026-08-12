@@ -70,8 +70,9 @@ implementation can use a separately chosen license after review.
 - Show `media` and `attachments` through attachment-specific UI rather than as
   note folders.
 - Preserve relative links when possible.
-- Do not automatically rename a note file from its heading in the MVP.
-  Explicit rename support will be added later with link-update previews.
+- Match QOwnNotes' default behavior by deriving note filenames from the first
+  meaningful content line on save. Explicit rename support and link-update
+  previews remain separate follow-up work.
 
 ### 5.3 File Fidelity
 
@@ -132,21 +133,21 @@ stable keybinding. The editor always gets the largest available area.
 
 Initial keybindings:
 
-| Key | Action |
-| --- | --- |
-| `j` / `k` | Move selection in Normal mode |
-| `h` / `l` | Move between panes in Normal mode |
-| `Enter` | Open selected folder, note, or link |
-| `i` | Enter Insert mode |
-| `Esc` | Return to Normal mode or close a transient view |
-| `Ctrl-s` | Save the current note |
-| `Ctrl-p` | Open command palette |
-| `/` | Search notes |
-| `n` | Create a note |
-| `r` | Rename selected note with preview |
-| `d` | Move selected note to local trash after confirmation |
-| `Tab` | Cycle panes |
-| `q` | Quit when no unsaved buffers require a decision |
+| Key       | Action                                               |
+| --------- | ---------------------------------------------------- |
+| `j` / `k` | Move selection in Normal mode                        |
+| `h` / `l` | Move between panes in Normal mode                    |
+| `Enter`   | Open selected folder, note, or link                  |
+| `i`       | Enter Insert mode                                    |
+| `Esc`     | Return to Normal mode or close a transient view      |
+| `Ctrl-s`  | Save the current note                                |
+| `Ctrl-p`  | Open command palette                                 |
+| `/`       | Search notes                                         |
+| `n`       | Create a note                                        |
+| `r`       | Rename selected note with preview                    |
+| `d`       | Move selected note to local trash after confirmation |
+| `Tab`     | Cycle panes                                          |
+| `q`       | Quit when no unsaved buffers require a decision      |
 
 Keybindings must be configurable after the MVP.
 
@@ -231,25 +232,25 @@ an async runtime materially simpler.
 
 Confirm current maintenance and licenses before adding dependencies.
 
-| Area | Candidate |
-| --- | --- |
-| TUI | `ratatui` |
-| Terminal backend | `crossterm` |
-| CLI | `clap` |
-| Configuration | `serde`, `toml`, `directories` |
-| Text buffer | `ropey` |
-| Unicode | `unicode-segmentation`, `unicode-width` |
-| Filesystem walking | `ignore` or `walkdir` |
-| Filesystem events | `notify` |
-| Content hashing | `blake3` |
-| SQLite tags | `rusqlite` with a controlled SQLite feature policy |
-| Markdown | `pulldown-cmark` |
-| Highlighting | `syntect` or a smaller Markdown-specific highlighter |
-| Diff view | `similar` |
-| Errors | `thiserror`, optionally `anyhow` at the binary boundary |
-| Logging | `tracing`, `tracing-subscriber` |
-| Secret handling | `secrecy`, `zeroize` |
-| Crypto | RustCrypto crates selected for QOwnNotes format compatibility |
+| Area               | Candidate                                                     |
+| ------------------ | ------------------------------------------------------------- |
+| TUI                | `ratatui`                                                     |
+| Terminal backend   | `crossterm`                                                   |
+| CLI                | `clap`                                                        |
+| Configuration      | `serde`, `toml`, `directories`                                |
+| Text buffer        | `ropey`                                                       |
+| Unicode            | `unicode-segmentation`, `unicode-width`                       |
+| Filesystem walking | `ignore` or `walkdir`                                         |
+| Filesystem events  | `notify`                                                      |
+| Content hashing    | `blake3`                                                      |
+| SQLite tags        | `rusqlite` with a controlled SQLite feature policy            |
+| Markdown           | `pulldown-cmark`                                              |
+| Highlighting       | `syntect` or a smaller Markdown-specific highlighter          |
+| Diff view          | `similar`                                                     |
+| Errors             | `thiserror`, optionally `anyhow` at the binary boundary       |
+| Logging            | `tracing`, `tracing-subscriber`                               |
+| Secret handling    | `secrecy`, `zeroize`                                          |
+| Crypto             | RustCrypto crates selected for QOwnNotes format compatibility |
 
 Avoid adding an embedded editor widget until its selection, undo, Unicode,
 and conflict behavior have been evaluated against the editor requirements.
@@ -540,15 +541,15 @@ Exit criteria:
 
 Before releases, test at least:
 
-| Area | Cases |
-| --- | --- |
-| Platform | Linux, macOS, Windows |
-| Terminal | Common native terminal, tmux, SSH session |
-| QOwnNotes | Current stable release and one prior supported release |
-| Sync behavior | Local edits and a representative desktop sync client |
-| Folder shape | Flat, deeply nested, spaces, non-ASCII names |
-| Files | LF, CRLF, BOM, no final newline, large note |
-| Metadata | No `notes.sqlite`, tags present, database locked |
+| Area          | Cases                                                  |
+| ------------- | ------------------------------------------------------ |
+| Platform      | Linux, macOS, Windows                                  |
+| Terminal      | Common native terminal, tmux, SSH session              |
+| QOwnNotes     | Current stable release and one prior supported release |
+| Sync behavior | Local edits and a representative desktop sync client   |
+| Folder shape  | Flat, deeply nested, spaces, non-ASCII names           |
+| Files         | LF, CRLF, BOM, no final newline, large note            |
+| Metadata      | No `notes.sqlite`, tags present, database locked       |
 
 ## 14. Security and Data-Safety Rules
 

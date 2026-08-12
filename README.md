@@ -28,21 +28,23 @@ opened read-only.
 
 ## Keys
 
-| Key                  | Action                                |
-| -------------------- | ------------------------------------- |
-| `j`, `k`             | Move selection or scroll the viewer   |
-| `PageUp`, `PageDown` | Scroll the viewer by one page         |
-| `Home`, `End`        | Jump to the start or end of the note  |
-| `h`, `l`, `Tab`      | Switch panes                          |
-| `Enter`              | Activate a note folder or open a note |
-| `e`                  | Edit the selected note                |
-| `/`                  | Search note names and text            |
-| `Ctrl-s`, `Esc`      | Save the note                         |
-| `Ctrl-r`             | Discard edits and reload from disk    |
-| `s`                  | Open settings                         |
-| `R`                  | Rescan the active note folder         |
-| `?`                  | Show help                             |
-| `q`, `Ctrl-c`        | Quit                                  |
+| Key                     | Action                                  |
+| ----------------------- | --------------------------------------- |
+| `j`, `k`                | Move selection or scroll the viewer     |
+| `PageUp`, `PageDown`    | Scroll the viewer by one page           |
+| `Home`, `End`           | Jump to the start or end of the note    |
+| `h`, `l`, `Tab`         | Switch panes                            |
+| `Enter`                 | Activate a note folder or open a note   |
+| `e`                     | Edit the selected note                  |
+| `/`                     | Search note names and text              |
+| `Ctrl-s`, `Esc`         | Save the note                           |
+| `Ctrl-r`                | Discard edits and reload from disk      |
+| `PageUp`, `PageDown`    | Move by one page while editing          |
+| `Ctrl-Home`, `Ctrl-End` | Move to note start or end while editing |
+| `s`                     | Open settings                           |
+| `R`                     | Rescan the active note folder           |
+| `?`                     | Show help                               |
+| `q`, `Ctrl-c`           | Quit                                    |
 
 Search terms are case-insensitive and all terms must match; use quotes to search
 for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The

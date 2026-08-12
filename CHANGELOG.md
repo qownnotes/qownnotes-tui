@@ -5,13 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-08-11
+## [0.3.0] - 2026-08-12
 
 ### Added
 
 - Editing the selected note directly from the note list with `e`.
 - Incremental, case-insensitive search across note names and note text with `/`.
 - `Esc` clearing a retained note search after leaving search input or editing a note.
+- Page and note-boundary cursor navigation while editing notes.
 
 ## [0.2.0] - 2026-08-11
 

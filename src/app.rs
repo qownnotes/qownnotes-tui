@@ -42,6 +42,7 @@ pub struct App {
     pub editor_cursor: usize,
     pub editor_scroll: u16,
     pub editor_horizontal_scroll: u16,
+    pub editor_page_size: u16,
     pub viewer_scroll: u16,
     pub viewer_max_scroll: u16,
     pub viewer_page_size: u16,
@@ -82,6 +83,7 @@ impl App {
             editor_cursor: 0,
             editor_scroll: 0,
             editor_horizontal_scroll: 0,
+            editor_page_size: 1,
             viewer_scroll: 0,
             viewer_max_scroll: 0,
             viewer_page_size: 1,
@@ -319,6 +321,22 @@ impl App {
             KeyCode::Right => self.editor_cursor = next_boundary(&self.content, self.editor_cursor),
             KeyCode::Up => self.move_editor_vertical(-1),
             KeyCode::Down => self.move_editor_vertical(1),
+            KeyCode::PageUp => {
+                for _ in 0..self.editor_page_size {
+                    self.move_editor_vertical(-1);
+                }
+            }
+            KeyCode::PageDown => {
+                for _ in 0..self.editor_page_size {
+                    self.move_editor_vertical(1);
+                }
+            }
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.editor_cursor = 0;
+            }
+            KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.editor_cursor = self.content.len();
+            }
             KeyCode::Home => {
                 self.editor_cursor = self.content[..self.editor_cursor]
                     .rfind('\n')
@@ -1046,6 +1064,52 @@ mod tests {
             "content!"
         );
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn editor_page_keys_move_by_the_viewport_height() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.content = "zero\none\ntwo\nthree\nfour\nfive".into();
+        app.editor_cursor = "zero\non".len();
+        app.editor_page_size = 3;
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(
+            &app.content[..app.editor_cursor],
+            "zero\none\ntwo\nthree\nfo"
+        );
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(&app.content[..app.editor_cursor], "zero\non");
+    }
+
+    #[test]
+    fn editor_control_home_and_end_move_to_note_boundaries() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.content = "first\nsecond\nthird".into();
+        app.editor_cursor = "first\nsec".len();
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+        assert_eq!(app.editor_cursor, 0);
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+        assert_eq!(app.editor_cursor, app.content.len());
     }
 
     #[test]

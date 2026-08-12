@@ -154,6 +154,7 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let viewport_width = area.width.saturating_sub(2).max(1);
     let viewport_height = area.height.saturating_sub(2).max(1);
+    app.editor_page_size = viewport_height;
     let before_cursor = &app.content[..app.editor_cursor];
     let cursor_line = before_cursor.bytes().filter(|byte| *byte == b'\n').count() as u16;
     let line_start = before_cursor.rfind('\n').map_or(0, |index| index + 1);
@@ -208,7 +209,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(frame: &mut Frame) {
-    let area = centered_rect(58, 17, frame.area());
+    let area = centered_rect(58, 21, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
@@ -224,6 +225,8 @@ fn draw_help(frame: &mut Frame) {
              s           open settings\n\
              Ctrl-s      save while editing\n\
              Ctrl-r      discard edits and reload from disk\n\
+             PgUp/PgDn   move by one page while editing\n\
+             Ctrl-Home/End  first or last editor position\n\
              Esc         save and leave the editor\n\
              R           reload active note folder\n\
              ?           toggle this help\n\

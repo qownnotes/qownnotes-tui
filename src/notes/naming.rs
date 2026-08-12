@@ -48,19 +48,19 @@ fn note_name(content: &str) -> String {
 }
 
 fn without_leading_metadata(content: &str) -> &str {
-    if let Some(rest) = content.strip_prefix("---\n")
-        && let Some(end) = rest.find("\n---")
-    {
-        return rest[end + 4..]
-            .strip_prefix('\n')
-            .unwrap_or(&rest[end + 4..]);
+    if let Some(rest) = content.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---") {
+            return rest[end + 4..]
+                .strip_prefix('\n')
+                .unwrap_or(&rest[end + 4..]);
+        }
     }
-    if content.starts_with("<!--")
-        && let Some(end) = content.find("-->")
-    {
-        return content[end + 3..]
-            .strip_prefix('\n')
-            .unwrap_or(&content[end + 3..]);
+    if content.starts_with("<!--") {
+        if let Some(end) = content.find("-->") {
+            return content[end + 3..]
+                .strip_prefix('\n')
+                .unwrap_or(&content[end + 3..]);
+        }
     }
     content
 }

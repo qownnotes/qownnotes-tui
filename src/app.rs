@@ -726,15 +726,16 @@ impl App {
             return;
         };
         let renamed = naming::automatic_relative_path(self.root(), &relative, &self.content);
-        if renamed != relative
-            && let Err(error) = fs::rename(self.root().join(&relative), self.root().join(&renamed))
-        {
-            self.status = format!(
-                "Unable to rename {} to {}: {error}",
-                relative.display(),
-                renamed.display()
-            );
-            return;
+        if renamed != relative {
+            if let Err(error) = fs::rename(self.root().join(&relative), self.root().join(&renamed))
+            {
+                self.status = format!(
+                    "Unable to rename {} to {}: {error}",
+                    relative.display(),
+                    renamed.display()
+                );
+                return;
+            }
         }
         let path = self.root().join(&renamed);
         match fs::write(&path, self.content.as_bytes()) {

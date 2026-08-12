@@ -11,8 +11,9 @@ QOwnNotes-compatible note folders. Rust 1.85 is the minimum supported version.
 - Use `just test` to run all tests.
 - Use `just check` before submitting changes; it checks formatting, runs Clippy
   with warnings denied, and runs all tests.
-- Use `just nix-build` when changing packaging and `just flake-check` when
-  changing Nix configuration.
+- Use `just nix-build` before submitting changes to verify that the application
+  builds from the Git-filtered Nix source.
+- Use `just flake-check` when changing Nix configuration.
 - Keep changes focused and follow the existing Rust and Ratatui patterns.
 
 ## Changelog

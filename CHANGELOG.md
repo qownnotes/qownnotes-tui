@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Editing the selected note directly from the note list with `e`.
+- Incremental, case-insensitive search across note names and note text with `/`.
+- `Esc` clearing a retained note search after leaving search input or editing a note.
 
 ## [0.2.0] - 2026-08-11
 

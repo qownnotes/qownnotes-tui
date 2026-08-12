@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::SystemTime};
+use std::{path::PathBuf, sync::Arc, time::SystemTime};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Note {
@@ -6,6 +6,7 @@ pub struct Note {
     pub relative_path: PathBuf,
     pub size: u64,
     pub modified: SystemTime,
+    pub search_text_lowercase: Arc<str>,
 }
 
 impl Note {
@@ -15,5 +16,12 @@ impl Note {
             .unwrap_or(self.relative_path.as_os_str())
             .to_string_lossy()
             .into_owned()
+    }
+
+    pub fn matches_search(&self, terms: &[String]) -> bool {
+        let name = self.name().to_lowercase();
+        terms
+            .iter()
+            .all(|term| name.contains(term) || self.search_text_lowercase.contains(term))
     }
 }

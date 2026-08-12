@@ -32,6 +32,7 @@ pub struct App {
     pub selected_folder: usize,
     pub active_folder: usize,
     pub note_sort: NoteSort,
+    pub all_notes: Vec<Note>,
     pub notes: Vec<Note>,
     pub selected_note: usize,
     pub pane: Pane,
@@ -46,6 +47,8 @@ pub struct App {
     pub viewer_page_size: u16,
     pub status: String,
     pub loading: bool,
+    pub search_query: String,
+    pub searching: bool,
     pub show_help: bool,
     pub show_settings: bool,
     pub settings_interval: String,
@@ -69,6 +72,7 @@ impl App {
             active_folder: config.active_folder,
             note_sort: config.note_sort,
             note_folders: config.note_folders,
+            all_notes: Vec::new(),
             notes: Vec::new(),
             selected_note: 0,
             pane: Pane::Notes,
@@ -83,6 +87,8 @@ impl App {
             viewer_page_size: 1,
             status: "Scanning notes...".into(),
             loading: true,
+            search_query: String::new(),
+            searching: false,
             show_help: false,
             show_settings: false,
             settings_interval: config.save_interval_seconds.to_string(),
@@ -112,15 +118,14 @@ impl App {
         match result {
             Ok(mut notes) => {
                 sort_notes(&mut notes, self.note_sort);
-                self.notes = notes;
-                self.selected_note = 0;
-                self.status = format!(
-                    "{}: {} notes",
-                    self.note_folders[folder].name,
-                    self.notes.len()
-                );
-                if !self.notes.is_empty() {
-                    self.load_selected_note();
+                self.all_notes = notes;
+                self.apply_search();
+                if self.search_query.is_empty() {
+                    self.status = format!(
+                        "{}: {} notes",
+                        self.note_folders[folder].name,
+                        self.notes.len()
+                    );
                 }
             }
             Err(error) => self.status = error,
@@ -148,6 +153,10 @@ impl App {
             self.handle_editor_key(key);
             return;
         }
+        if self.searching {
+            self.handle_search_key(key);
+            return;
+        }
         match key.code {
             KeyCode::Char('q') => {
                 self.save_note();
@@ -155,6 +164,15 @@ impl App {
             }
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('s') => self.show_settings = true,
+            KeyCode::Char('/') => {
+                self.searching = true;
+                self.pane = Pane::Notes;
+                self.update_search_status();
+            }
+            KeyCode::Esc if !self.search_query.is_empty() => {
+                self.search_query.clear();
+                self.apply_search();
+            }
             KeyCode::Char('e')
                 if matches!(self.pane, Pane::Notes | Pane::Viewer)
                     && self.current_note.is_some() =>
@@ -178,6 +196,70 @@ impl App {
             KeyCode::Enter => self.open_selection(scans),
             KeyCode::Char('R') => self.start_scan(scans),
             _ => {}
+        }
+    }
+
+    fn handle_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.searching = false;
+                self.search_query.clear();
+                self.apply_search();
+            }
+            KeyCode::Enter => {
+                self.searching = false;
+                self.update_search_status();
+            }
+            KeyCode::Backspace => {
+                self.search_query.pop();
+                self.apply_search();
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.search_query.push(character);
+                self.apply_search();
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_search(&mut self) {
+        let terms = search_terms(&self.search_query);
+        self.notes = if terms.is_empty() {
+            self.all_notes.clone()
+        } else {
+            self.all_notes
+                .iter()
+                .filter(|note| note.matches_search(&terms))
+                .cloned()
+                .collect()
+        };
+        self.selected_note = 0;
+        self.note_list_offset = 0;
+        if self.notes.is_empty() {
+            self.content.clear();
+            self.persisted_content.clear();
+            self.current_note = None;
+            self.viewer_scroll = 0;
+        } else {
+            self.load_selected_note();
+        }
+        self.update_search_status();
+    }
+
+    fn update_search_status(&mut self) {
+        if self.search_query.is_empty() {
+            self.status = format!("{} notes", self.notes.len());
+        } else {
+            self.status = format!(
+                "Search: {} ({} of {} notes)",
+                self.search_query,
+                self.notes.len(),
+                self.all_notes.len()
+            );
         }
     }
 
@@ -415,6 +497,9 @@ impl App {
         if self.pane == Pane::Folders {
             if self.selected_folder != self.active_folder {
                 self.active_folder = self.selected_folder;
+                self.search_query.clear();
+                self.searching = false;
+                self.all_notes.clear();
                 self.notes.clear();
                 self.content.clear();
                 self.current_note = None;
@@ -493,6 +578,7 @@ impl App {
                 } else {
                     self.content = disk_content.clone();
                     self.persisted_content = disk_content;
+                    self.update_search_text(&relative);
                     self.editor_cursor = self.editor_cursor.min(self.content.len());
                     while !self.content.is_char_boundary(self.editor_cursor) {
                         self.editor_cursor -= 1;
@@ -524,6 +610,7 @@ impl App {
         match fs::write(&path, self.content.as_bytes()) {
             Ok(()) => {
                 self.persisted_content.clone_from(&self.content);
+                self.update_search_text(&relative);
                 self.dirty = false;
                 self.dirty_since = None;
                 self.status = format!("Saved {}", relative.display());
@@ -540,6 +627,7 @@ impl App {
             Ok(content) => {
                 self.content = content.clone();
                 self.persisted_content = content;
+                self.update_search_text(&relative);
                 self.editor_cursor = self.content.len();
                 self.dirty = false;
                 self.dirty_since = None;
@@ -547,6 +635,18 @@ impl App {
                 self.status = format!("Reloaded {}; local edits discarded", relative.display());
             }
             Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn update_search_text(&mut self, relative: &Path) {
+        let text: std::sync::Arc<str> = self.persisted_content.to_lowercase().into();
+        for note in self
+            .all_notes
+            .iter_mut()
+            .chain(self.notes.iter_mut())
+            .filter(|note| note.relative_path == relative)
+        {
+            note.search_text_lowercase = text.clone();
         }
     }
 
@@ -652,6 +752,28 @@ fn sort_notes(notes: &mut [Note], sort: NoteSort) {
     });
 }
 
+fn search_terms(query: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut term = String::new();
+    let mut quoted = false;
+    for character in query.chars() {
+        match character {
+            '"' => quoted = !quoted,
+            character if character.is_whitespace() && !quoted => {
+                if !term.is_empty() {
+                    terms.push(term.to_lowercase());
+                    term.clear();
+                }
+            }
+            character => term.push(character),
+        }
+    }
+    if !term.is_empty() {
+        terms.push(term.to_lowercase());
+    }
+    terms
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -663,12 +785,12 @@ mod tests {
 
     use crate::{
         config::{Config, NoteFolder, NoteSort},
-        notes::model::Note,
+        notes::{model::Note, scan},
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
 
-    use super::{App, Pane, list_item_at, move_index, sort_notes};
+    use super::{App, Pane, list_item_at, move_index, search_terms, sort_notes};
 
     #[test]
     fn selection_stays_in_bounds() {
@@ -676,6 +798,77 @@ mod tests {
         assert_eq!(move_index(0, 3, -1), 0);
         assert_eq!(move_index(2, 3, 1), 2);
         assert_eq!(move_index(1, 3, 1), 2);
+    }
+
+    #[test]
+    fn search_terms_keep_quoted_phrases_together() {
+        assert_eq!(
+            search_terms("project \"release plan\""),
+            ["project", "release plan"]
+        );
+    }
+
+    #[test]
+    fn searches_note_names_and_text_with_all_terms() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("Project Alpha.md"), "milestones").unwrap();
+        fs::write(root.path().join("meeting.md"), "Project Alpha release plan").unwrap();
+        fs::write(root.path().join("unrelated.md"), "Project notes").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+
+        app.search_query = "project alpha".into();
+        app.apply_search();
+        let paths: Vec<_> = app
+            .notes
+            .iter()
+            .map(|note| note.relative_path.as_path())
+            .collect();
+
+        assert_eq!(
+            paths,
+            [Path::new("meeting.md"), Path::new("Project Alpha.md")]
+        );
+
+        app.search_query = "\"release plan\"".into();
+        app.apply_search();
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(app.notes[0].relative_path, Path::new("meeting.md"));
+    }
+
+    #[test]
+    fn escape_clears_retained_search_and_restores_all_notes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.md"), "matching").unwrap();
+        fs::write(root.path().join("second.md"), "other").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.search_query = "matching".into();
+        app.apply_search();
+        assert_eq!(app.notes.len(), 1);
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &scan_tx);
+
+        assert!(!app.searching);
+        assert!(app.search_query.is_empty());
+        assert_eq!(app.notes.len(), 2);
     }
 
     #[test]
@@ -718,11 +911,13 @@ mod tests {
                 relative_path: "first.md".into(),
                 size: 5,
                 modified: SystemTime::UNIX_EPOCH,
+                search_text_lowercase: "first".into(),
             },
             Note {
                 relative_path: "second.md".into(),
                 size: 6,
                 modified: SystemTime::UNIX_EPOCH,
+                search_text_lowercase: "second".into(),
             },
         ];
 
@@ -751,6 +946,7 @@ mod tests {
             relative_path: "note.md".into(),
             size: 9,
             modified: SystemTime::UNIX_EPOCH,
+            search_text_lowercase: "previewed".into(),
         }];
 
         app.scan_finished(0, Ok(notes));
@@ -777,6 +973,7 @@ mod tests {
             relative_path: "note.md".into(),
             size: 7,
             modified: SystemTime::UNIX_EPOCH,
+            search_text_lowercase: "content".into(),
         });
         let (scan_tx, _scan_rx) = mpsc::channel();
 
@@ -803,6 +1000,7 @@ mod tests {
             relative_path: "note.md".into(),
             size: 7,
             modified: SystemTime::UNIX_EPOCH,
+            search_text_lowercase: "content".into(),
         });
         app.load_selected_note();
         let (scan_tx, _scan_rx) = mpsc::channel();
@@ -834,6 +1032,7 @@ mod tests {
             relative_path: "note.md".into(),
             size: 7,
             modified: SystemTime::UNIX_EPOCH,
+            search_text_lowercase: "content".into(),
         });
         app.load_selected_note();
         app.editing = true;
@@ -866,6 +1065,7 @@ mod tests {
             relative_path: "note.md".into(),
             size: 8,
             modified: SystemTime::UNIX_EPOCH,
+            search_text_lowercase: "original".into(),
         });
         app.load_selected_note();
         fs::write(root.path().join("note.md"), "external").unwrap();
@@ -893,6 +1093,7 @@ mod tests {
             relative_path: "note.md".into(),
             size: 8,
             modified: SystemTime::UNIX_EPOCH,
+            search_text_lowercase: "original".into(),
         });
         app.load_selected_note();
         app.content.push_str(" local");
@@ -926,11 +1127,13 @@ mod tests {
                 relative_path: "zebra.md".into(),
                 size: 0,
                 modified: now,
+                search_text_lowercase: "".into(),
             },
             Note {
                 relative_path: "Alpha.md".into(),
                 size: 0,
                 modified: now + Duration::from_secs(1),
+                search_text_lowercase: "".into(),
             },
         ];
         sort_notes(&mut notes, NoteSort::LastModified);

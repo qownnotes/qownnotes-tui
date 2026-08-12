@@ -94,9 +94,16 @@ fn draw_notes(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut state = ListState::default()
         .with_offset(app.note_list_offset)
         .with_selected((!app.notes.is_empty()).then_some(app.selected_note));
+    let title = if app.searching {
+        format!("Search: {}_", app.search_query)
+    } else if !app.search_query.is_empty() {
+        format!("Search: {}", app.search_query)
+    } else {
+        "Notes".into()
+    };
     frame.render_stateful_widget(
         List::new(items)
-            .block(pane_block("Notes", app.pane == Pane::Notes))
+            .block(pane_block(&title, app.pane == Pane::Notes))
             .highlight_style(highlight_style())
             .highlight_symbol("› "),
         area,
@@ -186,7 +193,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.editing {
         " Ctrl-s save  Ctrl-r discard/reload  Esc save/close "
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
-        " e edit  j/k scroll  s settings  ? help  q quit "
+        " / search  e edit  j/k scroll  s settings  ? help  q quit "
     } else {
         " s settings  ? help  R reload  q quit "
     };
@@ -212,6 +219,7 @@ fn draw_help(frame: &mut Frame) {
              Tab         next pane\n\
              Enter       activate note folder or focus viewer\n\
              Mouse       activate items or scroll panes\n\
+             /           search note names and text\n\
              e           edit the selected note\n\
              s           open settings\n\
              Ctrl-s      save while editing\n\
@@ -271,7 +279,7 @@ fn draw_settings(frame: &mut Frame, app: &App) {
     );
 }
 
-fn pane_block(title: &'static str, active: bool) -> Block<'static> {
+fn pane_block(title: &str, active: bool) -> Block<'static> {
     let style = if active {
         Style::default().fg(Color::Cyan)
     } else {

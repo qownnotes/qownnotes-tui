@@ -1,4 +1,8 @@
-use std::path::{Component, Path, PathBuf};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, bail};
 use ignore::WalkBuilder;
@@ -41,9 +45,20 @@ pub fn scan(root: &Path) -> anyhow::Result<Vec<Note>> {
             modified: metadata
                 .modified()
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            search_text_lowercase: searchable_text(entry.path()),
         });
     }
     Ok(notes)
+}
+
+fn searchable_text(path: &Path) -> Arc<str> {
+    let Ok(bytes) = fs::read(path) else {
+        return Arc::from("");
+    };
+    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
+    String::from_utf8(bytes.to_vec())
+        .map(|text| Arc::from(text.to_lowercase()))
+        .unwrap_or_else(|_| Arc::from(""))
 }
 
 pub fn safe_relative_path(root: &Path, path: &Path) -> anyhow::Result<PathBuf> {

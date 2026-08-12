@@ -36,6 +36,7 @@ opened read-only.
 | `h`, `l`, `Tab`      | Switch panes                          |
 | `Enter`              | Activate a note folder or open a note |
 | `e`                  | Edit the selected note                |
+| `/`                  | Search note names and text            |
 | `Ctrl-s`, `Esc`      | Save the note                         |
 | `Ctrl-r`             | Discard edits and reload from disk    |
 | `s`                  | Open settings                         |
@@ -43,7 +44,9 @@ opened read-only.
 | `?`                  | Show help                             |
 | `q`, `Ctrl-c`        | Quit                                  |
 
-The viewer soft-wraps and syntax-highlights Markdown. Notes automatically save
+Search terms are case-insensitive and all terms must match; use quotes to search
+for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The
+viewer soft-wraps and syntax-highlights Markdown. Notes automatically save
 at the interval configured in Settings > General (10 seconds by default), and
 clean notes reload when their files change outside the app. Note folders and
 notes can also be activated with the left mouse

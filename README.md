@@ -36,6 +36,7 @@ opened read-only.
 | `h`, `l`, `Tab`         | Switch panes                            |
 | `Enter`                 | Activate a note folder or open a note   |
 | `n`, `Ctrl-n`           | Create a timestamped note               |
+| `d`                     | Delete a note after confirmation        |
 | `e`                     | Edit the selected note                  |
 | `/`                     | Search note names and text              |
 | `Ctrl-s`, `Esc`         | Save the note                           |
@@ -58,6 +59,10 @@ the app. Note folders and notes can also be activated with the left mouse button
 and the mouse wheel scrolls lists or the viewer. The note list follows QOwnNotes'
 configured alphabetical or last-change sorting. The application detects
 conflicting external edits before writing a modified note.
+
+Deleting a note asks for confirmation and moves it to the platform trash when
+available. If trashing is unavailable, the confirmed deletion permanently
+removes the file.
 
 ## Development
 

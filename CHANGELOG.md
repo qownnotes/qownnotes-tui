@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   date/time heading format.
 - Automatic filename updates from note headings on save, including sanitization,
   leading-emoji removal, and numeric collision suffixes.
+- Confirmed note deletion with platform-trash support and permanent removal as
+  a fallback when trashing is unavailable.
 
 ## [0.3.0] - 2026-08-12
 

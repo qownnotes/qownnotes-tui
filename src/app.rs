@@ -53,6 +53,7 @@ pub struct App {
     pub searching: bool,
     pub show_help: bool,
     pub show_settings: bool,
+    pub confirm_delete: bool,
     pub settings_interval: String,
     pub folder_area: Rect,
     pub notes_area: Rect,
@@ -94,6 +95,7 @@ impl App {
             searching: false,
             show_help: false,
             show_settings: false,
+            confirm_delete: false,
             settings_interval: config.save_interval_seconds.to_string(),
             folder_area: Rect::default(),
             notes_area: Rect::default(),
@@ -147,6 +149,17 @@ impl App {
             self.handle_settings_key(key);
             return;
         }
+        if self.confirm_delete {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => self.delete_current_note(),
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.confirm_delete = false;
+                    self.status = "Note deletion cancelled".into();
+                }
+                _ => {}
+            }
+            return;
+        }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.save_note();
             self.should_quit = !self.dirty;
@@ -168,6 +181,7 @@ impl App {
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('s') => self.show_settings = true,
             KeyCode::Char('n') => self.create_note(),
+            KeyCode::Char('d') if self.current_note.is_some() => self.confirm_delete = true,
             KeyCode::Char('/') => {
                 self.searching = true;
                 self.pane = Pane::Notes;
@@ -440,7 +454,7 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, scans: &Sender<ScanResult>) {
-        if self.editing || self.show_settings {
+        if self.editing || self.show_settings || self.confirm_delete {
             return;
         }
         if self.show_help {
@@ -623,6 +637,40 @@ impl App {
             }
             Err(error) => self.status = format!("Unable to refresh notes: {error:#}"),
         }
+    }
+
+    fn delete_current_note(&mut self) {
+        self.confirm_delete = false;
+        let Some(relative) = self.current_note.clone() else {
+            return;
+        };
+        let path = self.root().join(&relative);
+        let status = match trash::delete(&path) {
+            Ok(()) => format!("Moved {} to trash", relative.display()),
+            Err(trash_error) => match fs::remove_file(&path) {
+                Ok(()) => format!("Permanently deleted {}", relative.display()),
+                Err(delete_error) => {
+                    self.status = format!(
+                        "Unable to delete {}: trash: {trash_error}; file: {delete_error}",
+                        relative.display()
+                    );
+                    return;
+                }
+            },
+        };
+
+        self.all_notes.retain(|note| note.relative_path != relative);
+        self.notes.retain(|note| note.relative_path != relative);
+        self.selected_note = self.selected_note.min(self.notes.len().saturating_sub(1));
+        if self.notes.is_empty() {
+            self.content.clear();
+            self.persisted_content.clear();
+            self.current_note = None;
+            self.viewer_scroll = 0;
+        } else {
+            self.load_selected_note();
+        }
+        self.status = status;
     }
 
     fn tick(&mut self) {
@@ -1133,6 +1181,40 @@ mod tests {
         assert!(app.editing);
         assert_eq!(app.editor_cursor, app.content.len());
         assert_eq!(app.pane, Pane::Notes);
+    }
+
+    #[test]
+    fn deletion_requires_confirmation_and_can_be_cancelled() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "content").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            &scan_tx,
+        );
+
+        assert!(app.confirm_delete);
+        assert!(root.path().join("note.md").exists());
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            &scan_tx,
+        );
+
+        assert!(!app.confirm_delete);
+        assert!(root.path().join("note.md").exists());
+        assert_eq!(app.status, "Note deletion cancelled");
     }
 
     #[test]

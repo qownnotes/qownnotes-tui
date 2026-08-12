@@ -21,6 +21,7 @@ thiserror = "2.0"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+trash = "5.2"
 unicode-segmentation = "1.12"
 
 [dev-dependencies]

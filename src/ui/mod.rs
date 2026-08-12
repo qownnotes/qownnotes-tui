@@ -42,6 +42,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.show_settings {
         draw_settings(frame, app);
     }
+    if app.confirm_delete {
+        draw_delete_confirmation(frame, app);
+    }
 }
 
 fn draw_narrow(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -194,7 +197,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.editing {
         " Ctrl-s save  Ctrl-r discard/reload  Esc save/close "
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
-        " n new  / search  e edit  j/k scroll  s settings  ? help  q quit "
+        " n new  d delete  / search  e edit  j/k scroll  s settings  ? help  q quit "
     } else {
         " s settings  ? help  R reload  q quit "
     };
@@ -222,6 +225,7 @@ fn draw_help(frame: &mut Frame) {
              Mouse       activate items or scroll panes\n\
              /           search note names and text\n\
              n / Ctrl-n  create a timestamped note\n\
+             d           delete the selected note\n\
              e           edit the selected note\n\
              s           open settings\n\
              Ctrl-s      save while editing\n\
@@ -280,6 +284,28 @@ fn draw_settings(frame: &mut Frame, app: &App) {
         Paragraph::new("Enter save  Up/Down adjust  Esc cancel")
             .style(Style::default().fg(Color::DarkGray)),
         footer,
+    );
+}
+
+fn draw_delete_confirmation(frame: &mut Frame, app: &App) {
+    let area = centered_rect(62, 9, frame.area());
+    frame.render_widget(Clear, area);
+    let note = app
+        .current_note
+        .as_ref()
+        .map_or_else(String::new, |path| path.display().to_string());
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Delete {note}?\n\nThe note will be moved to trash when available; otherwise it will be permanently deleted.\n\ny / Enter confirm    n / Esc cancel"
+        ))
+        .block(
+            Block::default()
+                .title(" Confirm deletion ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .wrap(Wrap { trim: false }),
+        area,
     );
 }
 

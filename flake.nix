@@ -88,5 +88,10 @@
               '';
         };
       }
-    );
+    )
+    // {
+      homeModules.default = nixpkgs.lib.modules.importApply ./nix/home-manager.nix {
+        qownnotes-tui = self;
+      };
+    };
 }

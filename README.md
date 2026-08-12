@@ -64,6 +64,46 @@ Deleting a note asks for confirmation and moves it to the platform trash when
 available. If trashing is unavailable, the confirmed deletion permanently
 removes the file.
 
+## Theming
+
+Colors can be overridden in `theme.toml` beside the application `config.toml`.
+Values may be terminal color names such as `cyan` or six-digit RGB colors:
+
+```toml
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+accent = "#cba6f7"
+accent_foreground = "#1e1e2e"
+```
+
+Available keys are `background`, `foreground`, `muted`, `accent`,
+`accent_foreground`, `success`, `warning`, `error`, `heading`, `quote`, `code`,
+`link`, `fence`, and `field_background`. Unspecified keys retain their defaults.
+The default theme uses the terminal's ANSI palette and reset background, so it
+automatically follows terminal themes configured by Catppuccin or similar tools.
+An explicit `theme.toml` is only needed to override those terminal colors.
+
+The flake exports a Home Manager module for creating the file declaratively:
+
+```nix
+{
+  imports = [ inputs.qownnotes-tui.homeModules.default ];
+
+  programs.qownnotes-tui = {
+    enable = true;
+    theme = {
+      background = "#1e1e2e";
+      foreground = "#cdd6f4";
+      accent = "#cba6f7";
+      accent_foreground = "#1e1e2e";
+    };
+  };
+}
+```
+
+The color values can also be assigned from palette attributes provided by
+another Nix module.
+
 ## Development
 
 Run `just` to list recipes. The main validation command is `just check`; use

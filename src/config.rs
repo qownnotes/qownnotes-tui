@@ -9,6 +9,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
+use crate::theme::Theme;
 
 #[derive(Debug)]
 pub struct Config {
@@ -16,6 +17,7 @@ pub struct Config {
     pub active_folder: usize,
     pub note_sort: NoteSort,
     pub save_interval_seconds: u64,
+    pub theme: Theme,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +82,7 @@ impl Config {
                 active_folder: 0,
                 note_sort,
                 save_interval_seconds,
+                theme: Theme::default(),
             });
         }
 
@@ -98,6 +101,7 @@ impl Config {
             active_folder,
             note_sort,
             save_interval_seconds,
+            theme: Theme::default(),
         })
     }
 }

@@ -1,9 +1,11 @@
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
 };
 
-pub fn highlight(source: &str) -> Text<'static> {
+use crate::theme::Theme;
+
+pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
     let mut in_fence = false;
     let lines = source
         .split('\n')
@@ -14,12 +16,12 @@ pub fn highlight(source: &str) -> Text<'static> {
                 return Line::styled(
                     line.to_owned(),
                     Style::default()
-                        .fg(Color::Magenta)
+                        .fg(theme.fence.into())
                         .add_modifier(Modifier::BOLD),
                 );
             }
             if in_fence {
-                return Line::styled(line.to_owned(), Style::default().fg(Color::Green));
+                return Line::styled(line.to_owned(), Style::default().fg(theme.code.into()));
             }
             if trimmed.starts_with('#')
                 && trimmed
@@ -31,7 +33,7 @@ pub fn highlight(source: &str) -> Text<'static> {
                 return Line::styled(
                     line.to_owned(),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.heading.into())
                         .add_modifier(Modifier::BOLD),
                 );
             }
@@ -39,7 +41,7 @@ pub fn highlight(source: &str) -> Text<'static> {
                 return Line::styled(
                     line.to_owned(),
                     Style::default()
-                        .fg(Color::Blue)
+                        .fg(theme.quote.into())
                         .add_modifier(Modifier::ITALIC),
                 );
             }
@@ -48,13 +50,13 @@ pub fn highlight(source: &str) -> Text<'static> {
                 let mut spans = vec![Span::styled(
                     marker.to_owned(),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.warning.into())
                         .add_modifier(Modifier::BOLD),
                 )];
-                spans.extend(highlight_inline(rest));
+                spans.extend(highlight_inline(rest, theme));
                 return Line::from(spans);
             }
-            Line::from(highlight_inline(line))
+            Line::from(highlight_inline(line, theme))
         })
         .collect::<Vec<_>>();
     Text::from(lines)
@@ -73,7 +75,7 @@ fn list_marker_end(line: &str) -> Option<usize> {
     (digits > 0 && trimmed[digits..].starts_with(". ")).then_some(indent + digits + 2)
 }
 
-fn highlight_inline(mut text: &str) -> Vec<Span<'static>> {
+fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     while !text.is_empty() {
         let next = ['`', '[', '*']
@@ -91,7 +93,7 @@ fn highlight_inline(mut text: &str) -> Vec<Span<'static>> {
                 let length = end + 2;
                 spans.push(Span::styled(
                     text[..length].to_owned(),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.code.into()),
                 ));
                 text = &text[length..];
                 continue;
@@ -104,7 +106,7 @@ fn highlight_inline(mut text: &str) -> Vec<Span<'static>> {
                     spans.push(Span::styled(
                         text[..length].to_owned(),
                         Style::default()
-                            .fg(Color::LightBlue)
+                            .fg(theme.link.into())
                             .add_modifier(Modifier::UNDERLINED),
                     ));
                     text = &text[length..];
@@ -138,11 +140,16 @@ fn highlight_inline(mut text: &str) -> Vec<Span<'static>> {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
+
     use super::*;
 
     #[test]
     fn highlights_structural_and_inline_markdown() {
-        let text = highlight("# Heading\n- `code` and [link](target)\n```\nbody\n```");
+        let text = highlight(
+            "# Heading\n- `code` and [link](target)\n```\nbody\n```",
+            &Theme::default(),
+        );
         assert_eq!(text.lines.len(), 5);
         assert_eq!(text.lines[0].style.fg, Some(Color::Cyan));
         assert_eq!(text.lines[1].spans[0].style.fg, Some(Color::Yellow));

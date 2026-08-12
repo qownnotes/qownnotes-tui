@@ -18,6 +18,7 @@ use crate::{
     event::{Event, Events, ScanResult},
     notes::{model::Note, naming, scan},
     terminal::TerminalGuard,
+    theme::Theme,
     ui,
 };
 
@@ -33,6 +34,7 @@ pub struct App {
     pub selected_folder: usize,
     pub active_folder: usize,
     pub note_sort: NoteSort,
+    pub theme: Theme,
     pub all_notes: Vec<Note>,
     pub notes: Vec<Note>,
     pub selected_note: usize,
@@ -74,6 +76,7 @@ impl App {
             selected_folder: config.active_folder,
             active_folder: config.active_folder,
             note_sort: config.note_sort,
+            theme: config.theme,
             note_folders: config.note_folders,
             all_notes: Vec::new(),
             notes: Vec::new(),
@@ -955,6 +958,7 @@ mod tests {
     use crate::{
         config::{Config, NoteFolder, NoteSort},
         notes::{model::Note, scan},
+        theme::Theme,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
@@ -991,6 +995,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
 
@@ -1026,6 +1031,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.search_query = "matching".into();
@@ -1050,6 +1056,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.viewer_max_scroll = 10;
 
@@ -1074,6 +1081,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.notes = vec![
             Note {
@@ -1110,6 +1118,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         let notes = vec![Note {
             relative_path: "note.md".into(),
@@ -1137,6 +1146,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -1164,6 +1174,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -1196,6 +1207,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         let (scan_tx, _scan_rx) = mpsc::channel();
@@ -1230,6 +1242,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -1264,6 +1277,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
 
         app.create_note();
@@ -1295,6 +1309,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.selected_note = app
@@ -1325,6 +1340,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.content = "zero\none\ntwo\nthree\nfour\nfive".into();
         app.editor_cursor = "zero\non".len();
@@ -1350,6 +1366,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.content = "first\nsecond\nthird".into();
         app.editor_cursor = "first\nsec".len();
@@ -1373,6 +1390,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -1401,6 +1419,7 @@ mod tests {
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
+            theme: Theme::default(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),

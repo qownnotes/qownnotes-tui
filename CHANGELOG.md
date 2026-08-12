@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leading-emoji removal, and numeric collision suffixes.
 - Confirmed note deletion with platform-trash support and permanent removal as
   a fallback when trashing is unavailable.
+- Configurable UI and Markdown colors through `theme.toml`, with defaults that
+  follow the terminal's ANSI color palette.
+- A Home Manager module for installing the application and generating
+  `theme.toml` declaratively.
 
 ## [0.3.0] - 2026-08-12
 

@@ -6,6 +6,7 @@ mod event;
 mod markdown;
 mod notes;
 mod terminal;
+mod theme;
 mod ui;
 
 use std::{fs::OpenOptions, panic, sync::Mutex};
@@ -19,7 +20,8 @@ use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let config = Config::load(&cli)?;
+    let mut config = Config::load(&cli)?;
+    config.theme = theme::Theme::load()?;
     init_logging();
 
     tracing::info!(

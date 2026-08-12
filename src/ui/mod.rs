@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
@@ -17,6 +17,14 @@ use crate::{
 const NARROW_WIDTH: u16 = 80;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    frame.render_widget(
+        Block::default().style(
+            Style::default()
+                .fg(app.theme.foreground.into())
+                .bg(app.theme.background.into()),
+        ),
+        frame.area(),
+    );
     app.folder_area = Rect::default();
     app.notes_area = Rect::default();
     app.viewer_area = Rect::default();
@@ -37,7 +45,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     draw_status(frame, app, status);
     if app.show_help {
-        draw_help(frame);
+        draw_help(frame, app);
     }
     if app.show_settings {
         draw_settings(frame, app);
@@ -68,7 +76,7 @@ fn draw_folders(frame: &mut Frame, app: &mut App, area: Rect) {
                 "  "
             };
             ListItem::new(Line::from(vec![
-                Span::styled(marker, Style::default().fg(Color::Green)),
+                Span::styled(marker, Style::default().fg(app.theme.success.into())),
                 Span::raw(folder.name.clone()),
             ]))
         })
@@ -78,8 +86,8 @@ fn draw_folders(frame: &mut Frame, app: &mut App, area: Rect) {
         .with_selected(Some(app.selected_folder));
     frame.render_stateful_widget(
         List::new(items)
-            .block(pane_block("Note folders", app.pane == Pane::Folders))
-            .highlight_style(highlight_style())
+            .block(pane_block("Note folders", app.pane == Pane::Folders, app))
+            .highlight_style(highlight_style(app))
             .highlight_symbol("› "),
         area,
         &mut state,
@@ -106,8 +114,8 @@ fn draw_notes(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     frame.render_stateful_widget(
         List::new(items)
-            .block(pane_block(&title, app.pane == Pane::Notes))
-            .highlight_style(highlight_style())
+            .block(pane_block(&title, app.pane == Pane::Notes, app))
+            .highlight_style(highlight_style(app))
             .highlight_symbol("› "),
         area,
         &mut state,
@@ -122,12 +130,12 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let text = if app.current_note.is_some() {
-        markdown::highlight(&app.content)
+        markdown::highlight(&app.content, &app.theme)
     } else {
         "Select a note to preview it.".into()
     };
     let paragraph = Paragraph::new(text)
-        .block(pane_block("Viewer", app.pane == Pane::Viewer))
+        .block(pane_block("Viewer", app.pane == Pane::Viewer, app))
         .wrap(Wrap { trim: false });
     let viewport_width = area.width.saturating_sub(2).max(1);
     let viewport_height = area.height.saturating_sub(2);
@@ -175,8 +183,8 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     frame.render_widget(
-        Paragraph::new(markdown::highlight(&app.content))
-            .block(pane_block("Editor", true))
+        Paragraph::new(markdown::highlight(&app.content, &app.theme))
+            .block(pane_block("Editor", true, app))
             .scroll((app.editor_scroll, app.editor_horizontal_scroll)),
         area,
     );
@@ -203,15 +211,20 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(mode, Style::default().fg(Color::Black).bg(Color::Cyan)),
+            Span::styled(
+                mode,
+                Style::default()
+                    .fg(app.theme.accent_foreground.into())
+                    .bg(app.theme.accent.into()),
+            ),
             Span::raw(format!(" {}", app.status)),
-            Span::styled(help, Style::default().fg(Color::DarkGray)),
+            Span::styled(help, Style::default().fg(app.theme.muted.into())),
         ])),
         area,
     );
 }
 
-fn draw_help(frame: &mut Frame) {
+fn draw_help(frame: &mut Frame, app: &App) {
     let area = centered_rect(58, 21, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
@@ -237,7 +250,13 @@ fn draw_help(frame: &mut Frame) {
              ?           toggle this help\n\
              q / Ctrl-c  quit",
         )
-        .block(Block::default().title(" Help ").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(" Help ")
+                .borders(Borders::ALL)
+                .style(base_style(app))
+                .border_style(Style::default().fg(app.theme.accent.into())),
+        )
         .wrap(Wrap { trim: false }),
         area,
     );
@@ -249,7 +268,8 @@ fn draw_settings(frame: &mut Frame, app: &App) {
     let block = Block::default()
         .title(" Settings ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .style(base_style(app))
+        .border_style(Style::default().fg(app.theme.accent.into()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let [tabs, body, footer] = Layout::vertical([
@@ -261,8 +281,8 @@ fn draw_settings(frame: &mut Frame, app: &App) {
     frame.render_widget(
         Paragraph::new(" General ").style(
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(app.theme.accent_foreground.into())
+                .bg(app.theme.accent.into())
                 .add_modifier(Modifier::BOLD),
         ),
         tabs,
@@ -274,7 +294,9 @@ fn draw_settings(frame: &mut Frame, app: &App) {
                 Span::raw("Seconds: "),
                 Span::styled(
                     format!(" {} ", app.settings_interval),
-                    Style::default().fg(Color::Black).bg(Color::White),
+                    Style::default()
+                        .fg(app.theme.foreground.into())
+                        .bg(app.theme.field_background.into()),
                 ),
             ]),
         ]),
@@ -282,7 +304,7 @@ fn draw_settings(frame: &mut Frame, app: &App) {
     );
     frame.render_widget(
         Paragraph::new("Enter save  Up/Down adjust  Esc cancel")
-            .style(Style::default().fg(Color::DarkGray)),
+            .style(Style::default().fg(app.theme.muted.into())),
         footer,
     );
 }
@@ -302,18 +324,19 @@ fn draw_delete_confirmation(frame: &mut Frame, app: &App) {
             Block::default()
                 .title(" Confirm deletion ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red)),
+                .style(base_style(app))
+                .border_style(Style::default().fg(app.theme.error.into())),
         )
         .wrap(Wrap { trim: false }),
         area,
     );
 }
 
-fn pane_block(title: &str, active: bool) -> Block<'static> {
+fn pane_block(title: &str, active: bool, app: &App) -> Block<'static> {
     let style = if active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(app.theme.accent.into())
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(app.theme.muted.into())
     };
     Block::default()
         .title(format!(" {title} "))
@@ -321,11 +344,17 @@ fn pane_block(title: &str, active: bool) -> Block<'static> {
         .border_style(style)
 }
 
-fn highlight_style() -> Style {
+fn highlight_style(app: &App) -> Style {
     Style::default()
-        .fg(Color::Black)
-        .bg(Color::Cyan)
+        .fg(app.theme.accent_foreground.into())
+        .bg(app.theme.accent.into())
         .add_modifier(Modifier::BOLD)
+}
+
+fn base_style(app: &App) -> Style {
+    Style::default()
+        .fg(app.theme.foreground.into())
+        .bg(app.theme.background.into())
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

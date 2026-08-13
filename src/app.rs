@@ -31,6 +31,15 @@ pub enum Pane {
     Viewer,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NoteHistoryEntry {
+    path: PathBuf,
+    editor_cursor: usize,
+    editor_scroll: u16,
+    editor_horizontal_scroll: u16,
+    viewer_scroll: u16,
+}
+
 pub struct App {
     pub note_folders: Vec<NoteFolder>,
     pub selected_folder: usize,
@@ -67,6 +76,8 @@ pub struct App {
     pub viewer_link_cells: Vec<(u16, u16, usize)>,
     pub folder_list_offset: usize,
     pub note_list_offset: usize,
+    note_history: Vec<NoteHistoryEntry>,
+    note_history_index: Option<usize>,
     persisted_content: String,
     dirty: bool,
     dirty_since: Option<Instant>,
@@ -113,6 +124,8 @@ impl App {
             viewer_link_cells: Vec::new(),
             folder_list_offset: 0,
             note_list_offset: 0,
+            note_history: Vec::new(),
+            note_history_index: None,
             persisted_content: String::new(),
             dirty: false,
             dirty_since: None,
@@ -176,6 +189,19 @@ impl App {
             self.should_quit = !self.dirty;
             return;
         }
+        if key.modifiers == KeyModifiers::ALT {
+            match key.code {
+                KeyCode::Left => {
+                    self.navigate_note_history(-1);
+                    return;
+                }
+                KeyCode::Right => {
+                    self.navigate_note_history(1);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if self.editing {
             self.handle_editor_key(key);
             return;
@@ -207,9 +233,6 @@ impl App {
                     && self.current_note.is_some() =>
             {
                 self.editing = true;
-                self.editor_cursor = self.content.len();
-                self.editor_scroll = 0;
-                self.editor_horizontal_scroll = 0;
                 self.status = "Editing note".into();
             }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
@@ -269,6 +292,7 @@ impl App {
         self.selected_note = 0;
         self.note_list_offset = 0;
         if self.notes.is_empty() {
+            self.capture_note_position();
             self.content.clear();
             self.persisted_content.clear();
             self.current_note = None;
@@ -560,6 +584,8 @@ impl App {
                 self.content.clear();
                 self.current_note = None;
                 self.viewer_scroll = 0;
+                self.note_history.clear();
+                self.note_history_index = None;
                 self.start_scan(scans);
                 if let Err(error) = config::selected_note_folder(self.root()) {
                     self.status = format!("Unable to remember note folder: {error:#}");
@@ -582,6 +608,12 @@ impl App {
             .get(self.selected_note)
             .map(|note| note.relative_path.clone());
         if let Some(path) = path {
+            self.capture_note_position();
+            let previous_position = if self.current_note.as_deref() == Some(path.as_path()) {
+                self.current_note_position()
+            } else {
+                None
+            };
             match read_note(self.root(), &path) {
                 Ok(content) => {
                     self.content = content.clone();
@@ -590,7 +622,15 @@ impl App {
                     self.dirty = false;
                     self.dirty_since = None;
                     self.external_conflict = false;
+                    self.editor_cursor = self.content.len();
+                    self.editor_scroll = 0;
+                    self.editor_horizontal_scroll = 0;
                     self.viewer_scroll = 0;
+                    if let Some(position) = previous_position {
+                        self.restore_note_position(&position);
+                    } else {
+                        self.record_note_navigation(path.clone());
+                    }
                     self.status = path.display().to_string();
                     return true;
                 }
@@ -602,6 +642,104 @@ impl App {
             }
         }
         false
+    }
+
+    fn current_note_position(&self) -> Option<NoteHistoryEntry> {
+        self.current_note.as_ref().map(|path| NoteHistoryEntry {
+            path: path.clone(),
+            editor_cursor: self.editor_cursor,
+            editor_scroll: self.editor_scroll,
+            editor_horizontal_scroll: self.editor_horizontal_scroll,
+            viewer_scroll: self.viewer_scroll,
+        })
+    }
+
+    fn capture_note_position(&mut self) {
+        let Some(position) = self.current_note_position() else {
+            return;
+        };
+        let Some(index) = self.note_history_index else {
+            return;
+        };
+        if self
+            .note_history
+            .get(index)
+            .is_some_and(|entry| entry.path == position.path)
+        {
+            self.note_history[index] = position;
+        }
+    }
+
+    fn record_note_navigation(&mut self, path: PathBuf) {
+        let keep = self.note_history_index.map_or(0, |index| index + 1);
+        self.note_history.truncate(keep);
+        self.note_history.push(NoteHistoryEntry {
+            path,
+            editor_cursor: self.editor_cursor,
+            editor_scroll: self.editor_scroll,
+            editor_horizontal_scroll: self.editor_horizontal_scroll,
+            viewer_scroll: self.viewer_scroll,
+        });
+        self.note_history_index = Some(self.note_history.len() - 1);
+    }
+
+    fn restore_note_position(&mut self, position: &NoteHistoryEntry) {
+        self.editor_cursor = position.editor_cursor.min(self.content.len());
+        while !self.content.is_char_boundary(self.editor_cursor) {
+            self.editor_cursor -= 1;
+        }
+        self.editor_scroll = position.editor_scroll;
+        self.editor_horizontal_scroll = position.editor_horizontal_scroll;
+        self.viewer_scroll = position.viewer_scroll;
+    }
+
+    fn navigate_note_history(&mut self, delta: isize) {
+        if self.dirty {
+            self.save_note();
+            if self.dirty {
+                return;
+            }
+        }
+        self.capture_note_position();
+        let Some(current) = self.note_history_index else {
+            return;
+        };
+        let target_index = current
+            .saturating_add_signed(delta)
+            .min(self.note_history.len().saturating_sub(1));
+        if target_index == current {
+            return;
+        }
+        let entry = self.note_history[target_index].clone();
+        let Some(selected_note) = self
+            .all_notes
+            .iter()
+            .position(|note| note.relative_path == entry.path)
+        else {
+            self.status = format!("History note was not found: {}", entry.path.display());
+            return;
+        };
+
+        self.search_query.clear();
+        self.searching = false;
+        self.notes = self.all_notes.clone();
+        self.selected_note = selected_note;
+        self.note_list_offset = 0;
+        match read_note(self.root(), &entry.path) {
+            Ok(content) => {
+                self.content = content.clone();
+                self.persisted_content = content;
+                self.current_note = Some(entry.path.clone());
+                self.dirty = false;
+                self.dirty_since = None;
+                self.external_conflict = false;
+                self.restore_note_position(&entry);
+                self.viewer_heading = None;
+                self.note_history_index = Some(target_index);
+                self.status = entry.path.display().to_string();
+            }
+            Err(error) => self.status = error.to_string(),
+        }
     }
 
     fn open_note_link(&mut self, target: &NoteLinkTarget) {
@@ -619,7 +757,7 @@ impl App {
 
         self.search_query.clear();
         self.searching = false;
-        self.apply_search();
+        self.notes = self.all_notes.clone();
         let Some(index) = self
             .notes
             .iter()
@@ -807,6 +945,19 @@ impl App {
 
         self.all_notes.retain(|note| note.relative_path != relative);
         self.notes.retain(|note| note.relative_path != relative);
+        let previous_history_path = self.note_history_index.and_then(|index| {
+            self.note_history[..index]
+                .iter()
+                .rev()
+                .find(|entry| entry.path != relative)
+                .map(|entry| entry.path.clone())
+        });
+        self.note_history.retain(|entry| entry.path != relative);
+        self.note_history_index = previous_history_path.and_then(|path| {
+            self.note_history
+                .iter()
+                .rposition(|entry| entry.path == path)
+        });
         self.selected_note = self.selected_note.min(self.notes.len().saturating_sub(1));
         if self.notes.is_empty() {
             self.content.clear();
@@ -814,6 +965,7 @@ impl App {
             self.current_note = None;
             self.viewer_scroll = 0;
         } else {
+            self.current_note = None;
             self.load_selected_note();
         }
         self.status = status;
@@ -918,6 +1070,13 @@ impl App {
                 .modified()
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
             note.search_text_lowercase = search_text.clone();
+        }
+        for entry in self
+            .note_history
+            .iter_mut()
+            .filter(|entry| entry.path == previous)
+        {
+            entry.path = current.to_path_buf();
         }
         sort_notes(&mut self.all_notes, self.note_sort);
         let terms = search_terms(&self.search_query);
@@ -1381,6 +1540,82 @@ mod tests {
         assert_eq!(app.content, "second");
         assert_eq!(app.current_note.as_deref(), Some(Path::new("second.md")));
         assert_eq!(app.pane, Pane::Notes);
+    }
+
+    #[test]
+    fn alt_arrows_navigate_history_and_restore_note_positions() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.md"), "first\nline").unwrap();
+        fs::write(root.path().join("second.md"), "second\nline").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        let (scan_tx, _scan_rx) = mpsc::channel();
+        app.viewer_scroll = 4;
+        app.editor_cursor = 2;
+        app.editor_scroll = 1;
+        app.editor_horizontal_scroll = 3;
+
+        app.move_selection(1);
+        app.viewer_scroll = 7;
+        app.editor_cursor = 4;
+        app.editor_scroll = 2;
+        app.editor_horizontal_scroll = 5;
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT), &scan_tx);
+
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("first.md")));
+        assert_eq!(app.selected_note, 0);
+        assert_eq!(app.viewer_scroll, 4);
+        assert_eq!(app.editor_cursor, 2);
+        assert_eq!(app.editor_scroll, 1);
+        assert_eq!(app.editor_horizontal_scroll, 3);
+
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT), &scan_tx);
+
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("second.md")));
+        assert_eq!(app.selected_note, 1);
+        assert_eq!(app.viewer_scroll, 7);
+        assert_eq!(app.editor_cursor, 4);
+        assert_eq!(app.editor_scroll, 2);
+        assert_eq!(app.editor_horizontal_scroll, 5);
+    }
+
+    #[test]
+    fn selecting_a_note_after_going_back_discards_forward_history() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.md"), "first").unwrap();
+        fs::write(root.path().join("second.md"), "second").unwrap();
+        fs::write(root.path().join("third.md"), "third").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        let (scan_tx, _scan_rx) = mpsc::channel();
+        app.move_selection(1);
+        app.move_selection(1);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT), &scan_tx);
+
+        app.move_selection(-1);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT), &scan_tx);
+
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("first.md")));
+        assert_eq!(app.note_history.len(), 3);
+        assert_eq!(app.note_history_index, Some(2));
     }
 
     #[test]

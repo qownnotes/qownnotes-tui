@@ -265,7 +265,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(58, 21, frame.area());
+    let area = centered_rect(58, 22, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
@@ -274,6 +274,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Home / End  first or last viewer line\n\
              h / l       move between panes\n\
              Tab         next pane\n\
+             Alt-Left/Right  back or forward in note history\n\
              Enter       activate note folder or focus viewer\n\
              Mouse       activate items, note links, or scroll panes\n\
              /           search note names and text\n\

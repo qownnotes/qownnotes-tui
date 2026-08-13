@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Nix package.
 - Clickable relative, legacy `note://`, and wiki-style note links in the viewer,
   including heading navigation for relative Markdown links.
+- Back and forward note navigation with `Alt-Left` and `Alt-Right`, preserving
+  each history entry's viewer and editor position.
 
 ## [0.3.0] - 2026-08-12
 

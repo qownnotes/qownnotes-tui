@@ -69,6 +69,23 @@ pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
                         .fg(theme.warning.into())
                         .add_modifier(Modifier::BOLD),
                 )];
+                let rest = if let Some((checkbox_end, state)) = checkbox_marker(rest) {
+                    let (checkbox, rest) = rest.split_at(checkbox_end);
+                    let color = match state {
+                        CheckboxState::Unchecked => theme.warning,
+                        CheckboxState::Partial => theme.muted,
+                        CheckboxState::Checked => theme.success,
+                    };
+                    spans.push(Span::styled(
+                        checkbox.to_owned(),
+                        Style::default()
+                            .fg(color.into())
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    rest
+                } else {
+                    rest
+                };
                 spans.extend(highlight_inline(rest, theme));
                 return Line::from(spans);
             }
@@ -177,6 +194,26 @@ fn list_marker_end(line: &str) -> Option<usize> {
     }
     let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
     (digits > 0 && trimmed[digits..].starts_with(". ")).then_some(indent + digits + 2)
+}
+
+enum CheckboxState {
+    Unchecked,
+    Partial,
+    Checked,
+}
+
+fn checkbox_marker(text: &str) -> Option<(usize, CheckboxState)> {
+    let (state, rest) = if let Some(rest) = text.strip_prefix("[ ]") {
+        (CheckboxState::Unchecked, rest)
+    } else if let Some(rest) = text.strip_prefix("[-]") {
+        (CheckboxState::Partial, rest)
+    } else {
+        let rest = text
+            .strip_prefix("[x]")
+            .or_else(|| text.strip_prefix("[X]"))?;
+        (CheckboxState::Checked, rest)
+    };
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((3, state))
 }
 
 fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
@@ -455,6 +492,39 @@ mod tests {
         assert_eq!(text.lines[0].style.fg, Some(Color::Cyan));
         assert_eq!(text.lines[1].spans[0].style.fg, Some(Color::Yellow));
         assert_eq!(text.lines[3].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn highlights_checkbox_list_markers() {
+        let text = highlight(
+            "- [ ] pending `task`\n* [x] complete\n1. [X] complete\n- [-] partial\n- [no] plain",
+            &Theme::default(),
+        );
+
+        assert_eq!(text.lines[0].spans[0].content, "- ");
+        assert_eq!(text.lines[0].spans[1].content, "[ ]");
+        assert_eq!(text.lines[0].spans[1].style.fg, Some(Color::Yellow));
+        assert_eq!(text.lines[0].spans[3].content, "`task`");
+        assert_eq!(text.lines[0].spans[3].style.fg, Some(Color::Green));
+        assert_eq!(text.lines[1].spans[1].content, "[x]");
+        assert_eq!(text.lines[1].spans[1].style.fg, Some(Color::Green));
+        assert_eq!(text.lines[2].spans[1].content, "[X]");
+        assert_eq!(text.lines[2].spans[1].style.fg, Some(Color::Green));
+        assert_eq!(text.lines[3].spans[1].content, "[-]");
+        assert_eq!(text.lines[3].spans[1].style.fg, Some(Color::DarkGray));
+        assert_eq!(
+            text.lines[4]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            "- [no] plain"
+        );
+        assert!(
+            text.lines[4].spans[1..]
+                .iter()
+                .all(|span| span.style.fg.is_none())
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::mpsc::{self, Sender},
     thread,
     time::{Duration, Instant},
@@ -10,12 +10,14 @@ use chrono::Local;
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use percent_encoding::percent_decode_str;
 use ratatui::layout::Rect;
 
 use crate::{
     config::{self, Config, NoteFolder, NoteSort},
     error::NoteReadError,
     event::{Event, Events, ScanResult},
+    markdown::{NoteLink, NoteLinkTarget},
     notes::{model::Note, naming, scan},
     terminal::TerminalGuard,
     theme::Theme,
@@ -49,6 +51,7 @@ pub struct App {
     pub viewer_scroll: u16,
     pub viewer_max_scroll: u16,
     pub viewer_page_size: u16,
+    pub viewer_heading: Option<String>,
     pub status: String,
     pub loading: bool,
     pub search_query: String,
@@ -60,6 +63,8 @@ pub struct App {
     pub folder_area: Rect,
     pub notes_area: Rect,
     pub viewer_area: Rect,
+    pub viewer_links: Vec<NoteLink>,
+    pub viewer_link_cells: Vec<(u16, u16, usize)>,
     pub folder_list_offset: usize,
     pub note_list_offset: usize,
     persisted_content: String,
@@ -92,6 +97,7 @@ impl App {
             viewer_scroll: 0,
             viewer_max_scroll: 0,
             viewer_page_size: 1,
+            viewer_heading: None,
             status: "Scanning notes...".into(),
             loading: true,
             search_query: String::new(),
@@ -103,6 +109,8 @@ impl App {
             folder_area: Rect::default(),
             notes_area: Rect::default(),
             viewer_area: Rect::default(),
+            viewer_links: Vec::new(),
+            viewer_link_cells: Vec::new(),
             folder_list_offset: 0,
             note_list_offset: 0,
             persisted_content: String::new(),
@@ -468,7 +476,18 @@ impl App {
         }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(index) = list_item_at(
+                if self.viewer_area.contains((mouse.column, mouse.row).into()) {
+                    self.pane = Pane::Viewer;
+                    if let Some(target) = self
+                        .viewer_link_cells
+                        .iter()
+                        .find(|(column, row, _)| *column == mouse.column && *row == mouse.row)
+                        .and_then(|(_, _, index)| self.viewer_links.get(*index))
+                        .map(|link| link.target.clone())
+                    {
+                        self.open_note_link(&target);
+                    }
+                } else if let Some(index) = list_item_at(
                     self.folder_area,
                     mouse.column,
                     mouse.row,
@@ -583,6 +602,130 @@ impl App {
             }
         }
         false
+    }
+
+    fn open_note_link(&mut self, target: &NoteLinkTarget) {
+        let heading = match target {
+            NoteLinkTarget::Path(target) => target.split_once('#').and_then(|(_, heading)| {
+                (!heading.is_empty())
+                    .then(|| percent_decode_str(heading).decode_utf8_lossy().into_owned())
+            }),
+            NoteLinkTarget::Legacy(_) | NoteLinkTarget::Wiki(_) => None,
+        };
+        let Some(relative) = self.resolve_note_link(target) else {
+            self.status = "Linked note was not found".into();
+            return;
+        };
+
+        self.search_query.clear();
+        self.searching = false;
+        self.apply_search();
+        let Some(index) = self
+            .notes
+            .iter()
+            .position(|note| note.relative_path == relative)
+        else {
+            self.status = format!("Linked note was not found: {}", relative.display());
+            return;
+        };
+        self.selected_note = index;
+        self.note_list_offset = 0;
+        if self.load_selected_note() {
+            self.pane = Pane::Viewer;
+            self.viewer_heading = heading;
+        }
+    }
+
+    fn resolve_note_link(&self, target: &NoteLinkTarget) -> Option<PathBuf> {
+        let notes = if self.all_notes.is_empty() {
+            &self.notes
+        } else {
+            &self.all_notes
+        };
+        match target {
+            NoteLinkTarget::Path(target) => {
+                let target = percent_decode_str(target.split('#').next().unwrap_or(target))
+                    .decode_utf8_lossy();
+                let target = target.strip_prefix("file://").unwrap_or(&target);
+                let path = Path::new(target);
+                let relative = if path.is_absolute() {
+                    path.strip_prefix(self.root()).ok()?.to_path_buf()
+                } else {
+                    let base = self
+                        .current_note
+                        .as_deref()
+                        .and_then(Path::parent)
+                        .unwrap_or_else(|| Path::new(""));
+                    normalize_relative_path(base, path)?
+                };
+                notes
+                    .iter()
+                    .find(|note| paths_equal_case_insensitive(&note.relative_path, &relative))
+                    .map(|note| note.relative_path.clone())
+            }
+            NoteLinkTarget::Legacy(target) => {
+                let name = percent_decode_str(
+                    target
+                        .strip_prefix("note://")
+                        .unwrap_or(target)
+                        .split('#')
+                        .next()
+                        .unwrap_or(target)
+                        .trim_end_matches('@'),
+                )
+                .decode_utf8_lossy();
+                notes
+                    .iter()
+                    .find(|note| legacy_link_name(&note.name()) == legacy_link_name(&name))
+                    .map(|note| note.relative_path.clone())
+            }
+            NoteLinkTarget::Wiki(target) => {
+                let target = target.split('|').next().unwrap_or(target).trim();
+                let target = target.split('#').next().unwrap_or(target).trim();
+                let root_relative = target.starts_with('/');
+                let target = target.trim_start_matches('/');
+                let path = Path::new(target);
+                let qualified = path.components().count() > 1;
+                let base = self
+                    .current_note
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .unwrap_or_else(|| Path::new(""));
+                let expected = if qualified {
+                    normalize_relative_path(if root_relative { Path::new("") } else { base }, path)
+                        .map(|path| path.with_extension(""))
+                } else {
+                    None
+                };
+                notes
+                    .iter()
+                    .filter(|note| {
+                        note.relative_path.file_stem().is_some_and(|stem| {
+                            stem.to_string_lossy().eq_ignore_ascii_case(
+                                path.file_stem()
+                                    .unwrap_or(path.as_os_str())
+                                    .to_string_lossy()
+                                    .as_ref(),
+                            )
+                        })
+                    })
+                    .min_by_key(|note| {
+                        if expected.as_ref().is_some_and(|expected| {
+                            paths_equal_case_insensitive(
+                                &note.relative_path.with_extension(""),
+                                expected,
+                            )
+                        }) {
+                            0
+                        } else if note.relative_path.parent() == Some(base) {
+                            1
+                        } else {
+                            2
+                        }
+                    })
+                    .map(|note| note.relative_path.clone())
+            }
+        }
     }
 
     fn start_scan(&mut self, scans: &Sender<ScanResult>) {
@@ -906,6 +1049,39 @@ fn list_item_at(area: Rect, column: u16, row: u16, offset: usize, count: usize) 
     (index < count).then_some(index)
 }
 
+fn normalize_relative_path(base: &Path, path: &Path) -> Option<PathBuf> {
+    let mut normalized = base.to_path_buf();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => {
+                normalized.pop().then_some(())?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(normalized)
+}
+
+fn paths_equal_case_insensitive(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
+}
+
+fn legacy_link_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
 fn sort_notes(notes: &mut [Note], sort: NoteSort) {
     notes.sort_by(|left, right| match sort {
         NoteSort::LastModified => right
@@ -960,10 +1136,13 @@ mod tests {
         notes::{model::Note, scan},
         theme::Theme,
     };
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::layout::Rect;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
     use super::{App, Pane, list_item_at, move_index, search_terms, sort_notes};
+    use crate::markdown::NoteLinkTarget;
 
     #[test]
     fn selection_stays_in_bounds() {
@@ -1066,6 +1245,104 @@ mod tests {
         assert_eq!(app.viewer_scroll, 10);
         app.scroll_viewer(-20);
         assert_eq!(app.viewer_scroll, 0);
+    }
+
+    #[test]
+    fn resolves_qownnotes_note_link_formats() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("folder")).unwrap();
+        fs::write(root.path().join("folder/Source.md"), "source").unwrap();
+        fs::write(root.path().join("folder/Relative note.md"), "relative").unwrap();
+        fs::write(root.path().join("Other note.md"), "other").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.selected_note = app
+            .notes
+            .iter()
+            .position(|note| note.relative_path == Path::new("folder/Source.md"))
+            .unwrap();
+        app.load_selected_note();
+
+        assert_eq!(
+            app.resolve_note_link(&NoteLinkTarget::Path("Relative%20note.md#Part".into())),
+            Some("folder/Relative note.md".into())
+        );
+        assert_eq!(
+            app.resolve_note_link(&NoteLinkTarget::Legacy("note://Other_note".into())),
+            Some("Other note.md".into())
+        );
+        assert_eq!(
+            app.resolve_note_link(&NoteLinkTarget::Wiki("/Other note#Heading|label".into())),
+            Some("Other note.md".into())
+        );
+    }
+
+    #[test]
+    fn clicking_a_wrapped_viewer_link_opens_the_note() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Source.md"),
+            "Words before a [linked note](Target%20note.md#Section%20One) that can wrap.",
+        )
+        .unwrap();
+        let target_content = format!("{}## Section One\nbody", "preface\n".repeat(12));
+        fs::write(root.path().join("Target note.md"), &target_content).unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.selected_note = app
+            .notes
+            .iter()
+            .position(|note| note.relative_path == Path::new("Source.md"))
+            .unwrap();
+        app.load_selected_note();
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(70, 12)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let (column, row, _) = app.viewer_link_cells[0];
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            },
+            &scan_tx,
+        );
+
+        assert_eq!(
+            app.current_note.as_deref(),
+            Some(Path::new("Target note.md"))
+        );
+        assert_eq!(app.content, target_content);
+        assert_eq!(app.pane, Pane::Viewer);
+
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        assert!(app.viewer_scroll > 0);
+        assert!(app.viewer_heading.is_none());
     }
 
     #[test]

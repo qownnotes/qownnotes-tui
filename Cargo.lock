@@ -879,6 +879,7 @@ dependencies = [
  "crossterm 0.29.0",
  "directories",
  "ignore",
+ "percent-encoding",
  "ratatui",
  "rusqlite",
  "serde",

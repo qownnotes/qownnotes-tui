@@ -1,11 +1,12 @@
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Wrap,
+        ScrollbarOrientation, ScrollbarState, Widget, Wrap,
     },
 };
 
@@ -125,6 +126,8 @@ fn draw_notes(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     app.viewer_area = area;
+    app.viewer_links.clear();
+    app.viewer_link_cells.clear();
     if app.editing {
         draw_editor(frame, app, area);
         return;
@@ -134,11 +137,26 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         "Select a note to preview it.".into()
     };
+    let viewport_width = area.width.saturating_sub(2).max(1);
+    let viewport_height = area.height.saturating_sub(2);
+    if let Some(heading) = app.viewer_heading.take() {
+        if let Some(offset) = markdown::heading_source_offset(&app.content, &heading) {
+            let preceding = app.content[..offset].strip_suffix('\n').unwrap_or("");
+            app.viewer_scroll = if offset == 0 {
+                0
+            } else {
+                Paragraph::new(markdown::highlight(preceding, &app.theme))
+                    .wrap(Wrap { trim: false })
+                    .line_count(viewport_width)
+                    .min(u16::MAX as usize) as u16
+            };
+        } else {
+            app.status = format!("Heading not found: {heading}");
+        }
+    }
     let paragraph = Paragraph::new(text)
         .block(pane_block("Viewer", app.pane == Pane::Viewer, app))
         .wrap(Wrap { trim: false });
-    let viewport_width = area.width.saturating_sub(2).max(1);
-    let viewport_height = area.height.saturating_sub(2);
     let line_count = paragraph.line_count(viewport_width);
     app.viewer_page_size = viewport_height.max(1);
     app.viewer_max_scroll = line_count
@@ -146,6 +164,28 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
         .min(u16::MAX as usize) as u16;
     app.viewer_scroll = app.viewer_scroll.min(app.viewer_max_scroll);
     frame.render_widget(paragraph.scroll((app.viewer_scroll, 0)), area);
+
+    if app.current_note.is_some() {
+        app.viewer_links = markdown::note_links(&app.content);
+        let metadata = markdown::link_metadata(&app.content, &app.viewer_links);
+        let mut metadata_buffer = Buffer::empty(area);
+        Paragraph::new(metadata)
+            .block(Block::default().borders(Borders::ALL))
+            .wrap(Wrap { trim: false })
+            .scroll((app.viewer_scroll, 0))
+            .render(area, &mut metadata_buffer);
+        for row in area.y..area.bottom() {
+            for column in area.x..area.right() {
+                if let Some(index) = metadata_buffer
+                    .cell((column, row))
+                    .and_then(|cell| markdown::color_link_id(cell.fg))
+                    .filter(|index| *index < app.viewer_links.len())
+                {
+                    app.viewer_link_cells.push((column, row, index));
+                }
+            }
+        }
+    }
 
     if app.viewer_max_scroll > 0 {
         let mut scrollbar = ScrollbarState::new(line_count)
@@ -235,7 +275,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              h / l       move between panes\n\
              Tab         next pane\n\
              Enter       activate note folder or focus viewer\n\
-             Mouse       activate items or scroll panes\n\
+             Mouse       activate items, note links, or scroll panes\n\
              /           search note names and text\n\
              n / Ctrl-n  create a timestamped note\n\
              d           delete the selected note\n\

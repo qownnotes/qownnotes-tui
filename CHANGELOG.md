@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Shell completion generation, with Bash, Fish, and Zsh scripts installed by
   the Nix package.
+- Clickable relative, legacy `note://`, and wiki-style note links in the viewer,
+  including heading navigation for relative Markdown links.
 
 ## [0.3.0] - 2026-08-12
 

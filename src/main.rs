@@ -9,10 +9,11 @@ mod terminal;
 mod theme;
 mod ui;
 
-use std::{fs::OpenOptions, panic, sync::Mutex};
+use std::{fs::OpenOptions, io, panic, sync::Mutex};
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::generate;
 use cli::Cli;
 use config::Config;
 use directories::ProjectDirs;
@@ -20,6 +21,12 @@ use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if let Some(shell) = cli.generate_completion {
+        let mut command = Cli::command();
+        generate(shell, &mut command, "qownnotes-tui", &mut io::stdout());
+        return Ok(());
+    }
+
     let mut config = Config::load(&cli)?;
     config.theme = theme::Theme::load()?;
     init_logging();

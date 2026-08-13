@@ -26,6 +26,18 @@ the application reads all available configured note folders from QOwnNotes and
 initially opens its current folder. The QOwnNotes application database is
 opened read-only.
 
+## Shell Completions
+
+The Nix package installs completions for Bash, Fish, and Zsh automatically.
+Completion scripts can also be generated manually:
+
+```console
+qownnotes-tui --generate-completion bash
+```
+
+Supported values are `bash`, `elvish`, `fish`, `powershell`, and `zsh`. The
+command writes the completion script to standard output.
+
 ## Keys
 
 | Key                     | Action                                  |

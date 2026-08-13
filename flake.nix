@@ -36,6 +36,13 @@
           };
           cargoLock.lockFile = ./Cargo.lock;
           strictDeps = true;
+          nativeBuildInputs = [ pkgs.installShellFiles ];
+          postInstall = ''
+            installShellCompletion --cmd qownnotes-tui \
+              --bash <($out/bin/qownnotes-tui --generate-completion bash) \
+              --fish <($out/bin/qownnotes-tui --generate-completion fish) \
+              --zsh <($out/bin/qownnotes-tui --generate-completion zsh)
+          '';
           meta = {
             description = "Keyboard-first terminal browser for QOwnNotes-compatible note folders";
             homepage = "https://github.com/qownnotes/qownnotes-tui";

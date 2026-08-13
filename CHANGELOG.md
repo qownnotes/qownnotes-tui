@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keys, plus clipboard cut, copy, and paste with `Ctrl-X`, `Ctrl-C`, and `Ctrl-V`.
 - Mouse drag selection in the viewer and editor, including wrapped and scrolled text.
 - A visible viewer cursor with arrow-key navigation and `Shift-Arrow` selection.
+- Reverse pane focus cycling with `Shift-Tab`.
 
 ## [0.3.0] - 2026-08-12
 

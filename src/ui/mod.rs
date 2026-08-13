@@ -443,7 +443,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              PgUp/PgDn   scroll viewer by one page\n\
              Home / End  first or last viewer line\n\
              h / l       move between panes\n\
-             Tab         next pane\n\
+             Tab/Shift-Tab  next or previous pane\n\
              Alt-Left/Right  back or forward in note history\n\
              Enter       activate note folder or focus viewer\n\
              Mouse       select text, activate items/links, or scroll panes\n\

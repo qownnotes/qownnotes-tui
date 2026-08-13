@@ -307,7 +307,7 @@ impl App {
                 self.viewer_follow_selection = true;
                 self.viewer_scroll = self.viewer_max_scroll;
             }
-            KeyCode::Char('h') | KeyCode::Left => self.previous_pane(),
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.previous_pane(),
             KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.next_pane(),
             KeyCode::Enter => self.open_selection(scans),
             KeyCode::Char('R') => self.start_scan(scans),
@@ -2345,6 +2345,30 @@ mod tests {
         assert_eq!(app.content, "second");
         assert_eq!(app.current_note.as_deref(), Some(Path::new("second.md")));
         assert_eq!(app.pane, Pane::Notes);
+    }
+
+    #[test]
+    fn shift_tab_cycles_pane_focus_backward() {
+        let mut app = App::new(Config {
+            note_folders: vec![],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            &scan_tx,
+        );
+        assert_eq!(app.pane, Pane::Folders);
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            &scan_tx,
+        );
+        assert_eq!(app.pane, Pane::Viewer);
     }
 
     #[test]

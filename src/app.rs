@@ -14,6 +14,7 @@ use percent_encoding::percent_decode_str;
 use ratatui::layout::Rect;
 
 use crate::{
+    clipboard::Clipboard,
     config::{self, Config, NoteFolder, NoteSort},
     error::NoteReadError,
     event::{Event, Events, ScanResult},
@@ -54,10 +55,13 @@ pub struct App {
     pub current_note: Option<PathBuf>,
     pub editing: bool,
     pub editor_cursor: usize,
+    pub editor_selection_anchor: Option<usize>,
     pub editor_scroll: u16,
     pub editor_horizontal_scroll: u16,
     pub editor_page_size: u16,
     pub viewer_scroll: u16,
+    pub viewer_cursor: usize,
+    pub viewer_selection_anchor: Option<usize>,
     pub viewer_max_scroll: u16,
     pub viewer_page_size: u16,
     pub viewer_heading: Option<String>,
@@ -84,6 +88,7 @@ pub struct App {
     external_conflict: bool,
     save_interval: Duration,
     should_quit: bool,
+    clipboard: Clipboard,
 }
 
 impl App {
@@ -102,10 +107,13 @@ impl App {
             current_note: None,
             editing: false,
             editor_cursor: 0,
+            editor_selection_anchor: None,
             editor_scroll: 0,
             editor_horizontal_scroll: 0,
             editor_page_size: 1,
             viewer_scroll: 0,
+            viewer_cursor: 0,
+            viewer_selection_anchor: None,
             viewer_max_scroll: 0,
             viewer_page_size: 1,
             viewer_heading: None,
@@ -132,6 +140,7 @@ impl App {
             external_conflict: false,
             save_interval: Duration::from_secs(config.save_interval_seconds.max(1)),
             should_quit: false,
+            clipboard: Clipboard::new(),
         }
     }
 
@@ -185,8 +194,7 @@ impl App {
             return;
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.save_note();
-            self.should_quit = !self.dirty;
+            self.copy_selection();
             return;
         }
         if key.modifiers == KeyModifiers::ALT {
@@ -210,6 +218,15 @@ impl App {
             self.handle_search_key(key);
             return;
         }
+        if self.pane == Pane::Viewer && key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                    self.extend_viewer_selection(key.code);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Char('q') => {
                 self.save_note();
@@ -227,6 +244,9 @@ impl App {
             KeyCode::Esc if !self.search_query.is_empty() => {
                 self.search_query.clear();
                 self.apply_search();
+            }
+            KeyCode::Esc if self.pane == Pane::Viewer => {
+                self.viewer_selection_anchor = None;
             }
             KeyCode::Char('e')
                 if matches!(self.pane, Pane::Notes | Pane::Viewer)
@@ -294,6 +314,7 @@ impl App {
         if self.notes.is_empty() {
             self.capture_note_position();
             self.content.clear();
+            self.clear_text_selection();
             self.persisted_content.clear();
             self.current_note = None;
             self.viewer_scroll = 0;
@@ -325,7 +346,31 @@ impl App {
             self.reload_note();
             return;
         }
+        if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(text) = self.clipboard.text() {
+                self.insert_editor_text(&text);
+            }
+            return;
+        }
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.cut_editor_selection();
+            return;
+        }
+        if key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(
+                key.code,
+                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+            )
+        {
+            self.editor_selection_anchor
+                .get_or_insert(self.editor_cursor);
+            self.move_editor_cursor(key.code);
+            return;
+        }
         match key.code {
+            KeyCode::Esc if self.editor_selection().is_some() => {
+                self.editor_selection_anchor = None;
+            }
             KeyCode::Esc => {
                 self.save_note();
                 if !self.dirty {
@@ -341,19 +386,13 @@ impl App {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                self.content.insert(self.editor_cursor, character);
-                self.editor_cursor += character.len_utf8();
-                self.mark_dirty();
+                let mut encoded = [0; 4];
+                self.insert_editor_text(character.encode_utf8(&mut encoded));
             }
-            KeyCode::Enter => {
-                self.content.insert(self.editor_cursor, '\n');
-                self.editor_cursor += 1;
-                self.mark_dirty();
-            }
-            KeyCode::Tab => {
-                self.content.insert_str(self.editor_cursor, "    ");
-                self.editor_cursor += 4;
-                self.mark_dirty();
+            KeyCode::Enter => self.insert_editor_text("\n"),
+            KeyCode::Tab => self.insert_editor_text("    "),
+            KeyCode::Backspace if self.editor_selection().is_some() => {
+                self.insert_editor_text("");
             }
             KeyCode::Backspace if self.editor_cursor > 0 => {
                 let previous = previous_boundary(&self.content, self.editor_cursor);
@@ -361,39 +400,58 @@ impl App {
                 self.editor_cursor = previous;
                 self.mark_dirty();
             }
+            KeyCode::Delete if self.editor_selection().is_some() => {
+                self.insert_editor_text("");
+            }
             KeyCode::Delete if self.editor_cursor < self.content.len() => {
                 let next = next_boundary(&self.content, self.editor_cursor);
                 self.content.drain(self.editor_cursor..next);
                 self.mark_dirty();
             }
             KeyCode::Left => {
-                self.editor_cursor = previous_boundary(&self.content, self.editor_cursor)
+                self.editor_selection_anchor = None;
+                self.editor_cursor = previous_boundary(&self.content, self.editor_cursor);
             }
-            KeyCode::Right => self.editor_cursor = next_boundary(&self.content, self.editor_cursor),
-            KeyCode::Up => self.move_editor_vertical(-1),
-            KeyCode::Down => self.move_editor_vertical(1),
+            KeyCode::Right => {
+                self.editor_selection_anchor = None;
+                self.editor_cursor = next_boundary(&self.content, self.editor_cursor);
+            }
+            KeyCode::Up => {
+                self.editor_selection_anchor = None;
+                self.move_editor_vertical(-1);
+            }
+            KeyCode::Down => {
+                self.editor_selection_anchor = None;
+                self.move_editor_vertical(1);
+            }
             KeyCode::PageUp => {
+                self.editor_selection_anchor = None;
                 for _ in 0..self.editor_page_size {
                     self.move_editor_vertical(-1);
                 }
             }
             KeyCode::PageDown => {
+                self.editor_selection_anchor = None;
                 for _ in 0..self.editor_page_size {
                     self.move_editor_vertical(1);
                 }
             }
             KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.editor_selection_anchor = None;
                 self.editor_cursor = 0;
             }
             KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.editor_selection_anchor = None;
                 self.editor_cursor = self.content.len();
             }
             KeyCode::Home => {
+                self.editor_selection_anchor = None;
                 self.editor_cursor = self.content[..self.editor_cursor]
                     .rfind('\n')
                     .map_or(0, |index| index + 1);
             }
             KeyCode::End => {
+                self.editor_selection_anchor = None;
                 self.editor_cursor += self.content[self.editor_cursor..]
                     .find('\n')
                     .unwrap_or(self.content.len() - self.editor_cursor);
@@ -462,30 +520,95 @@ impl App {
         }
     }
 
-    fn move_editor_vertical(&mut self, delta: isize) {
-        let before = &self.content[..self.editor_cursor];
-        let line_start = before.rfind('\n').map_or(0, |index| index + 1);
-        let column = self.content[line_start..self.editor_cursor].chars().count();
-        let target_start = if delta < 0 {
-            if line_start == 0 {
-                return;
-            }
-            self.content[..line_start - 1]
-                .rfind('\n')
-                .map_or(0, |index| index + 1)
+    pub fn editor_selection(&self) -> Option<std::ops::Range<usize>> {
+        selection_range(self.editor_selection_anchor, self.editor_cursor)
+    }
+
+    pub fn viewer_selection(&self) -> Option<std::ops::Range<usize>> {
+        selection_range(self.viewer_selection_anchor, self.viewer_cursor)
+    }
+
+    fn copy_selection(&mut self) {
+        let selection = if self.editing {
+            self.editor_selection()
+        } else if self.pane == Pane::Viewer {
+            self.viewer_selection()
         } else {
-            let Some(next) = self.content[self.editor_cursor..].find('\n') else {
-                return;
-            };
-            self.editor_cursor + next + 1
+            None
         };
-        let target_end = self.content[target_start..]
-            .find('\n')
-            .map_or(self.content.len(), |index| target_start + index);
-        self.editor_cursor = self.content[target_start..target_end]
-            .char_indices()
-            .nth(column)
-            .map_or(target_end, |(offset, _)| target_start + offset);
+        let Some(selection) = selection else {
+            self.status = "No text selected".into();
+            return;
+        };
+        let text = self.content[selection].to_owned();
+        let system = self.clipboard.set_text(text.clone());
+        self.status = if system {
+            format!("Copied {} characters", text.chars().count())
+        } else {
+            format!(
+                "Copied {} characters (system clipboard unavailable)",
+                text.chars().count()
+            )
+        };
+    }
+
+    fn insert_editor_text(&mut self, text: &str) {
+        let selection = self
+            .editor_selection()
+            .unwrap_or(self.editor_cursor..self.editor_cursor);
+        let start = selection.start;
+        self.content.replace_range(selection, text);
+        self.editor_cursor = start + text.len();
+        self.editor_selection_anchor = None;
+        self.mark_dirty();
+    }
+
+    fn cut_editor_selection(&mut self) {
+        let Some(selection) = self.editor_selection() else {
+            self.status = "No text selected".into();
+            return;
+        };
+        let text = self.content[selection.clone()].to_owned();
+        self.clipboard.set_text(text.clone());
+        self.content.replace_range(selection.clone(), "");
+        self.editor_cursor = selection.start;
+        self.editor_selection_anchor = None;
+        self.mark_dirty();
+        self.status = format!("Cut {} characters", text.chars().count());
+    }
+
+    fn move_editor_cursor(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Left => {
+                self.editor_cursor = previous_boundary(&self.content, self.editor_cursor)
+            }
+            KeyCode::Right => self.editor_cursor = next_boundary(&self.content, self.editor_cursor),
+            KeyCode::Up => self.move_editor_vertical(-1),
+            KeyCode::Down => self.move_editor_vertical(1),
+            _ => {}
+        }
+    }
+
+    fn extend_viewer_selection(&mut self, key: KeyCode) {
+        self.viewer_selection_anchor
+            .get_or_insert(self.viewer_cursor);
+        self.viewer_cursor = match key {
+            KeyCode::Left => previous_boundary(&self.content, self.viewer_cursor),
+            KeyCode::Right => next_boundary(&self.content, self.viewer_cursor),
+            KeyCode::Up => move_vertical(&self.content, self.viewer_cursor, -1),
+            KeyCode::Down => move_vertical(&self.content, self.viewer_cursor, 1),
+            _ => self.viewer_cursor,
+        };
+    }
+
+    fn clear_text_selection(&mut self) {
+        self.editor_selection_anchor = None;
+        self.viewer_cursor = 0;
+        self.viewer_selection_anchor = None;
+    }
+
+    fn move_editor_vertical(&mut self, delta: isize) {
+        self.editor_cursor = move_vertical(&self.content, self.editor_cursor, delta);
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, scans: &Sender<ScanResult>) {
@@ -582,6 +705,7 @@ impl App {
                 self.all_notes.clear();
                 self.notes.clear();
                 self.content.clear();
+                self.clear_text_selection();
                 self.current_note = None;
                 self.viewer_scroll = 0;
                 self.note_history.clear();
@@ -617,6 +741,7 @@ impl App {
             match read_note(self.root(), &path) {
                 Ok(content) => {
                     self.content = content.clone();
+                    self.clear_text_selection();
                     self.persisted_content = content;
                     self.current_note = Some(path.clone());
                     self.dirty = false;
@@ -636,6 +761,7 @@ impl App {
                 }
                 Err(error) => {
                     self.content.clear();
+                    self.clear_text_selection();
                     self.current_note = None;
                     self.status = error.to_string();
                 }
@@ -728,6 +854,7 @@ impl App {
         match read_note(self.root(), &entry.path) {
             Ok(content) => {
                 self.content = content.clone();
+                self.clear_text_selection();
                 self.persisted_content = content;
                 self.current_note = Some(entry.path.clone());
                 self.dirty = false;
@@ -961,6 +1088,7 @@ impl App {
         self.selected_note = self.selected_note.min(self.notes.len().saturating_sub(1));
         if self.notes.is_empty() {
             self.content.clear();
+            self.clear_text_selection();
             self.persisted_content.clear();
             self.current_note = None;
             self.viewer_scroll = 0;
@@ -994,6 +1122,7 @@ impl App {
                         "Note changed outside the app; Esc cannot save until resolved".into();
                 } else {
                     self.content = disk_content.clone();
+                    self.clear_text_selection();
                     self.persisted_content = disk_content;
                     self.update_search_text(&relative);
                     self.editor_cursor = self.editor_cursor.min(self.content.len());
@@ -1100,6 +1229,7 @@ impl App {
         match read_note(self.root(), &relative) {
             Ok(content) => {
                 self.content = content.clone();
+                self.clear_text_selection();
                 self.persisted_content = content;
                 self.update_search_text(&relative);
                 self.editor_cursor = self.content.len();
@@ -1152,6 +1282,8 @@ pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
         match events.next()? {
             Event::Key(key) => app.handle_key(key, &scan_tx),
             Event::Mouse(mouse) => app.handle_mouse(mouse, &scan_tx),
+            Event::Paste(text) if app.editing => app.insert_editor_text(&normalize_paste(&text)),
+            Event::Paste(_) => {}
             Event::ScanFinished((folder, result)) => app.scan_finished(folder, result),
             Event::Tick => app.tick(),
             Event::Resize => {}
@@ -1187,6 +1319,41 @@ fn next_boundary(content: &str, cursor: usize) -> usize {
         .chars()
         .next()
         .map_or(cursor, |character| cursor + character.len_utf8())
+}
+
+fn move_vertical(content: &str, cursor: usize, delta: isize) -> usize {
+    let before = &content[..cursor];
+    let line_start = before.rfind('\n').map_or(0, |index| index + 1);
+    let column = content[line_start..cursor].chars().count();
+    let target_start = if delta < 0 {
+        if line_start == 0 {
+            return cursor;
+        }
+        content[..line_start - 1]
+            .rfind('\n')
+            .map_or(0, |index| index + 1)
+    } else {
+        let Some(next) = content[cursor..].find('\n') else {
+            return cursor;
+        };
+        cursor + next + 1
+    };
+    let target_end = content[target_start..]
+        .find('\n')
+        .map_or(content.len(), |index| target_start + index);
+    content[target_start..target_end]
+        .char_indices()
+        .nth(column)
+        .map_or(target_end, |(offset, _)| target_start + offset)
+}
+
+fn selection_range(anchor: Option<usize>, cursor: usize) -> Option<std::ops::Range<usize>> {
+    let anchor = anchor?;
+    (anchor != cursor).then(|| anchor.min(cursor)..anchor.max(cursor))
+}
+
+fn normalize_paste(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn move_index(current: usize, count: usize, delta: isize) -> usize {
@@ -1776,6 +1943,115 @@ mod tests {
         assert!(!root.path().join("note.md").exists());
         assert_eq!(app.current_note.as_deref(), Some(Path::new("content!.md")));
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn shift_arrows_select_multiline_text_in_the_editor() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = "one\ntwo\nthree".into();
+        app.editor_cursor = 1;
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        app.handle_editor_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+
+        assert_eq!(app.editor_selection(), Some(1..9));
+        assert_eq!(&app.content[app.editor_selection().unwrap()], "ne\ntwo\nt");
+    }
+
+    #[test]
+    fn editor_input_and_paste_replace_the_selection() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = "alpha\nbeta".into();
+        app.persisted_content.clone_from(&app.content);
+        app.editor_cursor = 0;
+        app.editor_selection_anchor = Some(10);
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.content, "x");
+        assert_eq!(app.editor_cursor, 1);
+
+        app.clipboard.set_text("first\nsecond".into());
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert_eq!(app.content, "xfirst\nsecond");
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn control_x_cuts_an_editor_selection_to_the_clipboard() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = "first\nsecond".into();
+        app.persisted_content.clone_from(&app.content);
+        app.editor_cursor = 2;
+        app.editor_selection_anchor = Some(8);
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+
+        assert_eq!(app.content, "ficond");
+        assert_eq!(app.editor_cursor, 2);
+        assert!(app.editor_selection().is_none());
+        assert!(app.dirty);
+
+        app.editor_cursor = app.content.len();
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert_eq!(app.content, "ficondrst\nse");
+    }
+
+    #[test]
+    fn viewer_selection_copies_without_quitting() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = "first\nsecond".into();
+        app.pane = Pane::Viewer;
+        app.viewer_cursor = 2;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &scan_tx);
+        assert_eq!(app.viewer_selection(), Some(2..8));
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        app.editing = true;
+        app.editor_cursor = app.content.len();
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+
+        assert!(!app.should_quit);
+        assert_eq!(app.content, "first\nsecondrst\nse");
     }
 
     #[test]

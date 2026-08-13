@@ -133,7 +133,7 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let text = if app.current_note.is_some() {
-        markdown::highlight(&app.content, &app.theme)
+        markdown::highlight_selection(&app.content, &app.theme, app.viewer_selection())
     } else {
         "Select a note to preview it.".into()
     };
@@ -162,6 +162,21 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     app.viewer_max_scroll = line_count
         .saturating_sub(viewport_height as usize)
         .min(u16::MAX as usize) as u16;
+    if app.viewer_selection().is_some() {
+        let cursor_row = Paragraph::new(markdown::highlight(
+            &app.content[..app.viewer_cursor],
+            &app.theme,
+        ))
+        .wrap(Wrap { trim: false })
+        .line_count(viewport_width)
+        .saturating_sub(1)
+        .min(u16::MAX as usize) as u16;
+        if cursor_row < app.viewer_scroll {
+            app.viewer_scroll = cursor_row;
+        } else if cursor_row >= app.viewer_scroll.saturating_add(viewport_height.max(1)) {
+            app.viewer_scroll = cursor_row.saturating_sub(viewport_height.saturating_sub(1));
+        }
+    }
     app.viewer_scroll = app.viewer_scroll.min(app.viewer_max_scroll);
     frame.render_widget(paragraph.scroll((app.viewer_scroll, 0)), area);
 
@@ -223,9 +238,13 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     frame.render_widget(
-        Paragraph::new(markdown::highlight(&app.content, &app.theme))
-            .block(pane_block("Editor", true, app))
-            .scroll((app.editor_scroll, app.editor_horizontal_scroll)),
+        Paragraph::new(markdown::highlight_selection(
+            &app.content,
+            &app.theme,
+            app.editor_selection(),
+        ))
+        .block(pane_block("Editor", true, app))
+        .scroll((app.editor_scroll, app.editor_horizontal_scroll)),
         area,
     );
     frame.set_cursor_position((
@@ -243,7 +262,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let help = if app.loading {
         " scanning "
     } else if app.editing {
-        " Ctrl-s save  Ctrl-r discard/reload  Esc save/close "
+        " Shift-arrows select  Ctrl-x/c/v cut/copy/paste  Ctrl-s save  Esc close "
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
         " n new  d delete  / search  e edit  j/k scroll  s settings  ? help  q quit "
     } else {
@@ -265,7 +284,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(58, 22, frame.area());
+    let area = centered_rect(58, 24, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
@@ -286,10 +305,12 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Ctrl-r      discard edits and reload from disk\n\
              PgUp/PgDn   move by one page while editing\n\
              Ctrl-Home/End  first or last editor position\n\
+             Shift-Arrows select text in viewer or editor\n\
+             Ctrl-x/c/v  cut, copy, or paste in editor\n\
              Esc         save and leave the editor\n\
              R           reload active note folder\n\
              ?           toggle this help\n\
-             q / Ctrl-c  quit",
+             q           quit",
         )
         .block(
             Block::default()

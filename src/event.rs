@@ -9,6 +9,7 @@ pub type ScanResult = (usize, Result<Vec<Note>, String>);
 pub enum Event {
     Key(KeyEvent),
     Mouse(MouseEvent),
+    Paste(String),
     Resize,
     ScanFinished(ScanResult),
     Tick,
@@ -33,6 +34,7 @@ impl Events {
         match event::read()? {
             CrosstermEvent::Key(key) => Ok(Event::Key(key)),
             CrosstermEvent::Mouse(mouse) => Ok(Event::Mouse(mouse)),
+            CrosstermEvent::Paste(text) => Ok(Event::Paste(text)),
             CrosstermEvent::Resize(_, _) => Ok(Event::Resize),
             _ => Ok(Event::Tick),
         }

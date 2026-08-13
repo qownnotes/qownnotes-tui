@@ -77,6 +77,50 @@ pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
     Text::from(lines)
 }
 
+pub fn highlight_selection(
+    source: &str,
+    theme: &Theme,
+    selection: Option<Range<usize>>,
+) -> Text<'static> {
+    let Some(selection) = selection else {
+        return highlight(source, theme);
+    };
+    let highlighted = highlight(source, theme);
+    let mut source_offset = 0;
+    let lines = highlighted
+        .lines
+        .into_iter()
+        .map(|line| {
+            let line_style = line.style;
+            let mut spans = Vec::new();
+            for span in line.spans {
+                let text = span.content.into_owned();
+                let span_start = source_offset;
+                let span_end = span_start + text.len();
+                let selected_start = selection.start.clamp(span_start, span_end) - span_start;
+                let selected_end = selection.end.clamp(span_start, span_end) - span_start;
+                let style = line_style.patch(span.style);
+                if selected_start > 0 {
+                    spans.push(Span::styled(text[..selected_start].to_owned(), style));
+                }
+                if selected_end > selected_start {
+                    spans.push(Span::styled(
+                        text[selected_start..selected_end].to_owned(),
+                        style.add_modifier(Modifier::REVERSED),
+                    ));
+                }
+                if selected_end < text.len() {
+                    spans.push(Span::styled(text[selected_end..].to_owned(), style));
+                }
+                source_offset = span_end;
+            }
+            source_offset += 1;
+            Line::from(spans)
+        })
+        .collect::<Vec<_>>();
+    Text::from(lines)
+}
+
 fn list_marker_end(line: &str) -> Option<usize> {
     let indent = line.len() - line.trim_start().len();
     let trimmed = &line[indent..];
@@ -366,6 +410,25 @@ mod tests {
         assert_eq!(text.lines[0].style.fg, Some(Color::Cyan));
         assert_eq!(text.lines[1].spans[0].style.fg, Some(Color::Yellow));
         assert_eq!(text.lines[3].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn highlights_a_multiline_selection_over_markdown_styles() {
+        let text = highlight_selection(
+            "# Heading\nplain `code` text",
+            &Theme::default(),
+            Some(2..18),
+        );
+
+        let selected = text
+            .lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .filter(|span| span.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert_eq!(selected, "Headingplain `c");
     }
 
     #[test]

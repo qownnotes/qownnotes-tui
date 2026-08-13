@@ -51,7 +51,8 @@ command writes the completion script to standard output.
 | `d`                     | Delete a note after confirmation        |
 | `e`                     | Edit the selected note                  |
 | `/`                     | Search note names and text              |
-| `Ctrl-s`, `Esc`         | Save the note                           |
+| `Ctrl-s`                | Save the note                           |
+| `Esc`                   | Leave editor or return to the note list |
 | `Ctrl-r`                | Discard edits and reload from disk      |
 | `PageUp`, `PageDown`    | Move by one page while editing          |
 | `Ctrl-Home`, `Ctrl-End` | Move to note start or end while editing |

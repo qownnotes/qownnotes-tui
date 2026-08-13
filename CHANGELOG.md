@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mouse drag selection in the viewer and editor, including wrapped and scrolled text.
 - A visible viewer cursor with arrow-key navigation and `Shift-Arrow` selection.
 - Reverse pane focus cycling with `Shift-Tab`.
+- `Esc` navigation from the viewer back to the note list.
 
 ## [0.3.0] - 2026-08-12
 

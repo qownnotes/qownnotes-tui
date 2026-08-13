@@ -283,6 +283,7 @@ impl App {
             KeyCode::Esc if self.pane == Pane::Viewer => {
                 self.viewer_selection_anchor = None;
                 self.viewer_follow_selection = false;
+                self.pane = Pane::Notes;
             }
             KeyCode::Char('e')
                 if matches!(self.pane, Pane::Notes | Pane::Viewer)
@@ -2369,6 +2370,27 @@ mod tests {
             &scan_tx,
         );
         assert_eq!(app.pane, Pane::Viewer);
+    }
+
+    #[test]
+    fn escape_leaves_the_editor_then_returns_to_the_note_list() {
+        let mut app = App::new(Config {
+            note_folders: vec![],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.pane = Pane::Viewer;
+        app.editing = true;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &scan_tx);
+        assert!(!app.editing);
+        assert_eq!(app.pane, Pane::Viewer);
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &scan_tx);
+        assert_eq!(app.pane, Pane::Notes);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Pane},
+    app::{App, Pane, TextCell},
     markdown,
 };
 
@@ -128,6 +128,8 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     app.viewer_area = area;
     app.viewer_links.clear();
     app.viewer_link_cells.clear();
+    app.viewer_text_cells.clear();
+    app.editor_text_cells.clear();
     if app.editing {
         draw_editor(frame, app, area);
         return;
@@ -162,23 +164,32 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     app.viewer_max_scroll = line_count
         .saturating_sub(viewport_height as usize)
         .min(u16::MAX as usize) as u16;
-    if app.viewer_selection().is_some() {
-        let cursor_row = Paragraph::new(markdown::highlight(
-            &app.content[..app.viewer_cursor],
-            &app.theme,
-        ))
-        .wrap(Wrap { trim: false })
-        .line_count(viewport_width)
-        .saturating_sub(1)
-        .min(u16::MAX as usize) as u16;
-        if cursor_row < app.viewer_scroll {
-            app.viewer_scroll = cursor_row;
-        } else if cursor_row >= app.viewer_scroll.saturating_add(viewport_height.max(1)) {
-            app.viewer_scroll = cursor_row.saturating_sub(viewport_height.saturating_sub(1));
+    app.viewer_scroll = app.viewer_scroll.min(app.viewer_max_scroll);
+    if app.viewer_follow_selection && app.current_note.is_some() {
+        app.viewer_scroll = scroll_showing_offset(
+            &app.content,
+            area,
+            app.viewer_scroll,
+            app.viewer_max_scroll,
+            app.viewer_cursor,
+        );
+    }
+    frame.render_widget(paragraph.scroll((app.viewer_scroll, 0)), area);
+    if app.current_note.is_some() {
+        app.viewer_text_cells = text_cells(
+            &app.content,
+            area,
+            Some(Wrap { trim: false }),
+            (app.viewer_scroll, 0),
+        );
+        if app.pane == Pane::Viewer {
+            if let Some(position) =
+                cursor_cell_position(&app.viewer_text_cells, app.viewer_cursor, area)
+            {
+                frame.set_cursor_position(position);
+            }
         }
     }
-    app.viewer_scroll = app.viewer_scroll.min(app.viewer_max_scroll);
-    frame.render_widget(paragraph.scroll((app.viewer_scroll, 0)), area);
 
     if app.current_note.is_some() {
         app.viewer_links = markdown::note_links(&app.content);
@@ -217,6 +228,56 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+fn scroll_showing_offset(
+    content: &str,
+    area: Rect,
+    scroll: u16,
+    max_scroll: u16,
+    offset: usize,
+) -> u16 {
+    if shows_offset(content, area, scroll, offset) {
+        return scroll;
+    }
+    let mut low = 0;
+    let mut high = max_scroll;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if reaches_offset(content, area, middle, offset) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    low
+}
+
+fn shows_offset(content: &str, area: Rect, scroll: u16, offset: usize) -> bool {
+    let cells = text_cells(content, area, Some(Wrap { trim: false }), (scroll, 0));
+    let (Some(first), Some(last)) = (cells.first(), cells.last()) else {
+        return false;
+    };
+    (first.start..=last.end).contains(&offset)
+}
+
+fn reaches_offset(content: &str, area: Rect, scroll: u16, offset: usize) -> bool {
+    text_cells(content, area, Some(Wrap { trim: false }), (scroll, 0))
+        .last()
+        .is_some_and(|cell| cell.end >= offset)
+}
+
+fn cursor_cell_position(cells: &[TextCell], cursor: usize, area: Rect) -> Option<(u16, u16)> {
+    if let Some(cell) = cells.iter().find(|cell| cell.start == cursor) {
+        return Some((cell.column, cell.row));
+    }
+    let cell = cells.iter().rev().find(|cell| cell.end == cursor)?;
+    Some((
+        cell.column
+            .saturating_add(1)
+            .min(area.right().saturating_sub(2)),
+        cell.row,
+    ))
+}
+
 fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let viewport_width = area.width.saturating_sub(2).max(1);
     let viewport_height = area.height.saturating_sub(2).max(1);
@@ -247,10 +308,98 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         .scroll((app.editor_scroll, app.editor_horizontal_scroll)),
         area,
     );
-    frame.set_cursor_position((
-        area.x + 1 + cursor_column.saturating_sub(app.editor_horizontal_scroll),
-        area.y + 1 + cursor_line.saturating_sub(app.editor_scroll),
-    ));
+    app.editor_text_cells = text_cells(
+        &app.content,
+        area,
+        None,
+        (app.editor_scroll, app.editor_horizontal_scroll),
+    );
+    let position =
+        cursor_cell_position(&app.editor_text_cells, app.editor_cursor, area).unwrap_or((
+            area.x + 1 + cursor_column.saturating_sub(app.editor_horizontal_scroll),
+            area.y + 1 + cursor_line.saturating_sub(app.editor_scroll),
+        ));
+    frame.set_cursor_position(position);
+}
+
+fn text_cells(source: &str, area: Rect, wrap: Option<Wrap>, scroll: (u16, u16)) -> Vec<TextCell> {
+    let mut metadata_buffer = Buffer::empty(area);
+    let mut paragraph = Paragraph::new(markdown::selection_metadata(source))
+        .block(Block::default().borders(Borders::ALL))
+        .scroll(scroll);
+    if let Some(wrap) = wrap {
+        paragraph = paragraph.wrap(wrap);
+    }
+    paragraph.render(area, &mut metadata_buffer);
+
+    let mut rows = Vec::new();
+    for row in area.y.saturating_add(1)..area.bottom().saturating_sub(1) {
+        let mut cells = Vec::new();
+        for column in area.x.saturating_add(1)..area.right().saturating_sub(1) {
+            let Some(cell) = metadata_buffer.cell((column, row)) else {
+                continue;
+            };
+            let (Some(start), Some(end)) = (
+                markdown::decode_source_offset(cell.fg),
+                markdown::decode_source_offset(cell.bg),
+            ) else {
+                continue;
+            };
+            cells.push(TextCell {
+                column,
+                row,
+                start,
+                end,
+            });
+        }
+        rows.push((row, cells));
+    }
+    fill_blank_rows(source, area, &mut rows);
+    rows.into_iter().flat_map(|(_, cells)| cells).collect()
+}
+
+/// Blank source lines render no cells, so their positions are derived from the
+/// surrounding rows to keep every visible line selectable.
+fn fill_blank_rows(source: &str, area: Rect, rows: &mut [(u16, Vec<TextCell>)]) {
+    let column = area.x.saturating_add(1);
+    let mut previous_end = None;
+    for (row, cells) in rows.iter_mut() {
+        if let Some(last) = cells.last() {
+            previous_end = Some(last.end);
+            continue;
+        }
+        let Some(offset) = previous_end.map(|end: usize| end + 1) else {
+            continue;
+        };
+        if offset > source.len() {
+            continue;
+        }
+        cells.push(TextCell {
+            column,
+            row: *row,
+            start: offset,
+            end: offset,
+        });
+        previous_end = Some(offset);
+    }
+
+    let mut next_start = None;
+    for (row, cells) in rows.iter_mut().rev() {
+        if let Some(first) = cells.first() {
+            next_start = Some(first.start);
+            continue;
+        }
+        let Some(offset) = next_start.and_then(|start: usize| start.checked_sub(1)) else {
+            continue;
+        };
+        cells.push(TextCell {
+            column,
+            row: *row,
+            start: offset,
+            end: offset,
+        });
+        next_start = Some(offset);
+    }
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
@@ -288,14 +437,16 @@ fn draw_help(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
-            "j / k       move selection or scroll viewer\n\
+            "Arrow keys  move the viewer/editor cursor\n\
+             Shift-Arrows select text in viewer or editor\n\
+             j / k       move list selection or scroll viewer\n\
              PgUp/PgDn   scroll viewer by one page\n\
              Home / End  first or last viewer line\n\
              h / l       move between panes\n\
              Tab         next pane\n\
              Alt-Left/Right  back or forward in note history\n\
              Enter       activate note folder or focus viewer\n\
-             Mouse       activate items, note links, or scroll panes\n\
+             Mouse       select text, activate items/links, or scroll panes\n\
              /           search note names and text\n\
              n / Ctrl-n  create a timestamped note\n\
              d           delete the selected note\n\
@@ -305,7 +456,6 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Ctrl-r      discard edits and reload from disk\n\
              PgUp/PgDn   move by one page while editing\n\
              Ctrl-Home/End  first or last editor position\n\
-             Shift-Arrows select text in viewer or editor\n\
              Ctrl-x/c/v  cut, copy, or paste in editor\n\
              Esc         save and leave the editor\n\
              R           reload active note folder\n\
@@ -436,4 +586,52 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
             Constraint::Min(0),
         ])
         .split(vertical[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Theme;
+
+    #[test]
+    fn selection_metadata_wraps_exactly_like_rendered_text() {
+        let content = format!(
+            "# Heading\n\n{}\n\n- list item with `code` and [link](target.md)\n\n{}\n",
+            "wrapped words ".repeat(9),
+            "trailing paragraph ".repeat(5)
+        );
+        let theme = Theme::default();
+
+        for width in [24, 37, 56, 80] {
+            let highlighted = Paragraph::new(markdown::highlight(&content, &theme))
+                .block(Block::default().borders(Borders::ALL))
+                .wrap(Wrap { trim: false });
+            let metadata = Paragraph::new(markdown::selection_metadata(&content))
+                .block(Block::default().borders(Borders::ALL))
+                .wrap(Wrap { trim: false });
+
+            assert_eq!(
+                metadata.line_count(width),
+                highlighted.line_count(width),
+                "wrapped row count differs at width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_cells_cover_every_visible_row_including_blank_lines() {
+        let content = "first\n\n\nlast".to_owned();
+        let area = Rect::new(0, 0, 20, 8);
+
+        let cells = text_cells(&content, area, Some(Wrap { trim: false }), (0, 0));
+
+        let blank_offsets = cells
+            .iter()
+            .filter(|cell| cell.start == cell.end)
+            .map(|cell| cell.start)
+            .collect::<Vec<_>>();
+        assert_eq!(blank_offsets, [6, 7]);
+        assert_eq!(cells.first().map(|cell| cell.start), Some(0));
+        assert_eq!(cells.last().map(|cell| cell.end), Some(content.len()));
+    }
 }

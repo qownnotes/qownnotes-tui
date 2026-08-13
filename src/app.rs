@@ -32,6 +32,20 @@ pub enum Pane {
     Viewer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TextCell {
+    pub column: u16,
+    pub row: u16,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MouseSelectionTarget {
+    Viewer,
+    Editor,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NoteHistoryEntry {
     path: PathBuf,
@@ -62,6 +76,7 @@ pub struct App {
     pub viewer_scroll: u16,
     pub viewer_cursor: usize,
     pub viewer_selection_anchor: Option<usize>,
+    pub viewer_follow_selection: bool,
     pub viewer_max_scroll: u16,
     pub viewer_page_size: u16,
     pub viewer_heading: Option<String>,
@@ -78,6 +93,8 @@ pub struct App {
     pub viewer_area: Rect,
     pub viewer_links: Vec<NoteLink>,
     pub viewer_link_cells: Vec<(u16, u16, usize)>,
+    pub viewer_text_cells: Vec<TextCell>,
+    pub editor_text_cells: Vec<TextCell>,
     pub folder_list_offset: usize,
     pub note_list_offset: usize,
     note_history: Vec<NoteHistoryEntry>,
@@ -89,6 +106,9 @@ pub struct App {
     save_interval: Duration,
     should_quit: bool,
     clipboard: Clipboard,
+    mouse_selection: Option<MouseSelectionTarget>,
+    mouse_selection_origin: Option<(u16, u16)>,
+    mouse_pending_link: Option<NoteLinkTarget>,
 }
 
 impl App {
@@ -114,6 +134,7 @@ impl App {
             viewer_scroll: 0,
             viewer_cursor: 0,
             viewer_selection_anchor: None,
+            viewer_follow_selection: false,
             viewer_max_scroll: 0,
             viewer_page_size: 1,
             viewer_heading: None,
@@ -130,6 +151,8 @@ impl App {
             viewer_area: Rect::default(),
             viewer_links: Vec::new(),
             viewer_link_cells: Vec::new(),
+            viewer_text_cells: Vec::new(),
+            editor_text_cells: Vec::new(),
             folder_list_offset: 0,
             note_list_offset: 0,
             note_history: Vec::new(),
@@ -141,6 +164,9 @@ impl App {
             save_interval: Duration::from_secs(config.save_interval_seconds.max(1)),
             should_quit: false,
             clipboard: Clipboard::new(),
+            mouse_selection: None,
+            mouse_selection_origin: None,
+            mouse_pending_link: None,
         }
     }
 
@@ -227,6 +253,15 @@ impl App {
                 _ => {}
             }
         }
+        if self.pane == Pane::Viewer {
+            match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                    self.move_viewer_cursor(key.code);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Char('q') => {
                 self.save_note();
@@ -247,6 +282,7 @@ impl App {
             }
             KeyCode::Esc if self.pane == Pane::Viewer => {
                 self.viewer_selection_anchor = None;
+                self.viewer_follow_selection = false;
             }
             KeyCode::Char('e')
                 if matches!(self.pane, Pane::Notes | Pane::Viewer)
@@ -259,8 +295,16 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
             KeyCode::PageDown => self.scroll_viewer(self.viewer_page_size as isize),
             KeyCode::PageUp => self.scroll_viewer(-(self.viewer_page_size as isize)),
-            KeyCode::Home if self.pane == Pane::Viewer => self.viewer_scroll = 0,
+            KeyCode::Home if self.pane == Pane::Viewer => {
+                self.viewer_cursor = 0;
+                self.viewer_selection_anchor = None;
+                self.viewer_follow_selection = true;
+                self.viewer_scroll = 0;
+            }
             KeyCode::End if self.pane == Pane::Viewer => {
+                self.viewer_cursor = self.content.len();
+                self.viewer_selection_anchor = None;
+                self.viewer_follow_selection = true;
                 self.viewer_scroll = self.viewer_max_scroll;
             }
             KeyCode::Char('h') | KeyCode::Left => self.previous_pane(),
@@ -592,19 +636,74 @@ impl App {
     fn extend_viewer_selection(&mut self, key: KeyCode) {
         self.viewer_selection_anchor
             .get_or_insert(self.viewer_cursor);
-        self.viewer_cursor = match key {
-            KeyCode::Left => previous_boundary(&self.content, self.viewer_cursor),
-            KeyCode::Right => next_boundary(&self.content, self.viewer_cursor),
-            KeyCode::Up => move_vertical(&self.content, self.viewer_cursor, -1),
-            KeyCode::Down => move_vertical(&self.content, self.viewer_cursor, 1),
+        self.viewer_cursor = self.viewer_cursor_after(key);
+        self.viewer_follow_selection = true;
+    }
+
+    fn move_viewer_cursor(&mut self, key: KeyCode) {
+        self.viewer_selection_anchor = None;
+        self.viewer_cursor = self.viewer_cursor_after(key);
+        self.viewer_follow_selection = true;
+    }
+
+    fn viewer_cursor_after(&self, key: KeyCode) -> usize {
+        match key {
+            KeyCode::Left => self
+                .viewer_text_cells
+                .iter()
+                .rev()
+                .find(|cell| cell.end == self.viewer_cursor)
+                .map_or_else(
+                    || previous_boundary(&self.content, self.viewer_cursor),
+                    |cell| cell.start,
+                ),
+            KeyCode::Right => self
+                .viewer_text_cells
+                .iter()
+                .find(|cell| cell.start == self.viewer_cursor)
+                .map_or_else(
+                    || next_boundary(&self.content, self.viewer_cursor),
+                    |cell| cell.end,
+                ),
+            KeyCode::Up => self.viewer_vertical_cursor(-1),
+            KeyCode::Down => self.viewer_vertical_cursor(1),
             _ => self.viewer_cursor,
+        }
+    }
+
+    fn viewer_vertical_cursor(&self, delta: i16) -> usize {
+        let current = self
+            .viewer_text_cells
+            .iter()
+            .find(|cell| cell.start == self.viewer_cursor)
+            .or_else(|| {
+                self.viewer_text_cells
+                    .iter()
+                    .rev()
+                    .find(|cell| cell.end == self.viewer_cursor)
+            });
+        let Some(current) = current else {
+            return move_vertical(&self.content, self.viewer_cursor, isize::from(delta));
         };
+        let target_row = current.row.saturating_add_signed(delta);
+        self.viewer_text_cells
+            .iter()
+            .filter(|cell| cell.row == target_row)
+            .min_by_key(|cell| cell.column.abs_diff(current.column))
+            .map_or_else(
+                || move_vertical(&self.content, self.viewer_cursor, isize::from(delta)),
+                |cell| cell.start,
+            )
     }
 
     fn clear_text_selection(&mut self) {
         self.editor_selection_anchor = None;
         self.viewer_cursor = 0;
         self.viewer_selection_anchor = None;
+        self.viewer_follow_selection = false;
+        self.mouse_selection = None;
+        self.mouse_selection_origin = None;
+        self.mouse_pending_link = None;
     }
 
     fn move_editor_vertical(&mut self, delta: isize) {
@@ -612,7 +711,7 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, scans: &Sender<ScanResult>) {
-        if self.editing || self.show_settings || self.confirm_delete {
+        if self.show_settings || self.confirm_delete {
             return;
         }
         if self.show_help {
@@ -625,14 +724,33 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.viewer_area.contains((mouse.column, mouse.row).into()) {
                     self.pane = Pane::Viewer;
-                    if let Some(target) = self
-                        .viewer_link_cells
-                        .iter()
-                        .find(|(column, row, _)| *column == mouse.column && *row == mouse.row)
-                        .and_then(|(_, _, index)| self.viewer_links.get(*index))
-                        .map(|link| link.target.clone())
-                    {
-                        self.open_note_link(&target);
+                    let target = if self.editing {
+                        MouseSelectionTarget::Editor
+                    } else {
+                        MouseSelectionTarget::Viewer
+                    };
+                    if let Some(offset) = self.mouse_text_offset(target, mouse.column, mouse.row) {
+                        self.mouse_selection = Some(target);
+                        self.mouse_selection_origin = Some((mouse.column, mouse.row));
+                        match target {
+                            MouseSelectionTarget::Viewer => {
+                                self.viewer_cursor = offset;
+                                self.viewer_selection_anchor = Some(offset);
+                                self.viewer_follow_selection = false;
+                                self.mouse_pending_link = self
+                                    .viewer_link_cells
+                                    .iter()
+                                    .find(|(column, row, _)| {
+                                        *column == mouse.column && *row == mouse.row
+                                    })
+                                    .and_then(|(_, _, index)| self.viewer_links.get(*index))
+                                    .map(|link| link.target.clone());
+                            }
+                            MouseSelectionTarget::Editor => {
+                                self.editor_cursor = offset;
+                                self.editor_selection_anchor = Some(offset);
+                            }
+                        }
                     }
                 } else if let Some(index) = list_item_at(
                     self.folder_area,
@@ -656,10 +774,98 @@ impl App {
                     self.load_selected_note();
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) => self.update_mouse_selection(mouse),
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.update_mouse_selection(mouse);
+                let open_link = self.mouse_selection == Some(MouseSelectionTarget::Viewer)
+                    && self.viewer_selection().is_none();
+                self.mouse_selection = None;
+                self.mouse_selection_origin = None;
+                if open_link {
+                    if let Some(target) = self.mouse_pending_link.take() {
+                        self.open_note_link(&target);
+                    }
+                } else {
+                    self.mouse_pending_link = None;
+                }
+            }
             MouseEventKind::ScrollUp => self.handle_mouse_scroll(mouse, -3),
             MouseEventKind::ScrollDown => self.handle_mouse_scroll(mouse, 3),
             _ => {}
         }
+    }
+
+    fn update_mouse_selection(&mut self, mouse: MouseEvent) {
+        let Some(target) = self.mouse_selection else {
+            return;
+        };
+        let top = self.viewer_area.y;
+        let bottom = self.viewer_area.bottom().saturating_sub(1);
+        if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left)) && mouse.row <= top {
+            match target {
+                MouseSelectionTarget::Viewer => self.scroll_viewer(-1),
+                MouseSelectionTarget::Editor => {
+                    self.editor_scroll = self.editor_scroll.saturating_sub(1)
+                }
+            }
+        } else if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left))
+            && mouse.row >= bottom
+        {
+            match target {
+                MouseSelectionTarget::Viewer => self.scroll_viewer(1),
+                MouseSelectionTarget::Editor => {
+                    self.editor_scroll = self.editor_scroll.saturating_add(1)
+                }
+            }
+        }
+        let anchor = match target {
+            MouseSelectionTarget::Viewer => self.viewer_selection_anchor,
+            MouseSelectionTarget::Editor => self.editor_selection_anchor,
+        };
+        if self.mouse_selection_origin == Some((mouse.column, mouse.row)) {
+            let Some(anchor) = anchor else {
+                return;
+            };
+            match target {
+                MouseSelectionTarget::Viewer => self.viewer_cursor = anchor,
+                MouseSelectionTarget::Editor => self.editor_cursor = anchor,
+            }
+            return;
+        }
+        let Some(offset) = self.mouse_text_offset(target, mouse.column, mouse.row) else {
+            return;
+        };
+        match target {
+            MouseSelectionTarget::Viewer => self.viewer_cursor = offset,
+            MouseSelectionTarget::Editor => self.editor_cursor = offset,
+        }
+    }
+
+    fn mouse_text_offset(
+        &self,
+        target: MouseSelectionTarget,
+        column: u16,
+        row: u16,
+    ) -> Option<usize> {
+        let cells = match target {
+            MouseSelectionTarget::Viewer => &self.viewer_text_cells,
+            MouseSelectionTarget::Editor => &self.editor_text_cells,
+        };
+        let nearest_row = cells
+            .iter()
+            .map(|cell| cell.row)
+            .min_by_key(|cell_row| cell_row.abs_diff(row))?;
+        let first = cells.iter().find(|cell| cell.row == nearest_row)?;
+        let cell = cells
+            .iter()
+            .filter(|cell| cell.row == nearest_row)
+            .min_by_key(|cell| cell.column.abs_diff(column))?;
+        let last = cells.iter().rev().find(|cell| cell.row == nearest_row)?;
+        if column > last.column {
+            return Some(last.end);
+        }
+        let cell = if column <= first.column { first } else { cell };
+        Some(cell.start)
     }
 
     fn handle_mouse_scroll(&mut self, mouse: MouseEvent, delta: isize) {
@@ -1465,7 +1671,12 @@ mod tests {
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
-    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        layout::{Position, Rect},
+        style::Modifier,
+    };
 
     use super::{App, Pane, list_item_at, move_index, search_terms, sort_notes};
     use crate::markdown::NoteLinkTarget;
@@ -1656,6 +1867,15 @@ mod tests {
             },
             &scan_tx,
         );
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            },
+            &scan_tx,
+        );
 
         assert_eq!(
             app.current_note.as_deref(),
@@ -1669,6 +1889,424 @@ mod tests {
             .unwrap();
         assert!(app.viewer_scroll > 0);
         assert!(app.viewer_heading.is_none());
+    }
+
+    #[test]
+    fn dragging_across_wrapped_viewer_text_selects_source_text() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "alpha beta gamma delta epsilon zeta eta theta\nsecond line",
+        )
+        .unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(120, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        for cell in &app.viewer_text_cells {
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .cell((cell.column, cell.row))
+                .unwrap()
+                .symbol();
+            if !rendered.is_empty() {
+                assert_eq!(rendered, &app.content[cell.start..cell.end]);
+            }
+        }
+        let start = app
+            .viewer_text_cells
+            .iter()
+            .find(|cell| cell.start == 2)
+            .copied()
+            .unwrap();
+        let end = app
+            .viewer_text_cells
+            .iter()
+            .find(|cell| cell.start == 51)
+            .copied()
+            .unwrap();
+        assert_ne!(start.row, end.row);
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        for (kind, cell) in [
+            (MouseEventKind::Down(MouseButton::Left), start),
+            (MouseEventKind::Drag(MouseButton::Left), end),
+            (MouseEventKind::Up(MouseButton::Left), end),
+        ] {
+            app.handle_mouse(
+                MouseEvent {
+                    kind,
+                    column: cell.column,
+                    row: cell.row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &scan_tx,
+            );
+            terminal
+                .draw(|frame| crate::ui::draw(frame, &mut app))
+                .unwrap();
+        }
+
+        assert_eq!(app.viewer_selection(), Some(2..51));
+        assert_eq!(
+            &app.content[app.viewer_selection().unwrap()],
+            "pha beta gamma delta epsilon zeta eta theta\nsecon"
+        );
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(end.column, end.row)
+        );
+    }
+
+    #[test]
+    fn viewer_cursor_stays_visible_while_moving_through_wrapped_text() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = (0..12)
+            .map(|line| format!("line {line:02} {}", "wrapped words ".repeat(6)))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        for step in 0..40 {
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &scan_tx);
+            terminal
+                .draw(|frame| crate::ui::draw(frame, &mut app))
+                .unwrap();
+            let cell = app
+                .viewer_text_cells
+                .iter()
+                .find(|cell| cell.start == app.viewer_cursor);
+            assert!(
+                cell.is_some(),
+                "step {step}: cursor {} not visible, scroll {}",
+                app.viewer_cursor,
+                app.viewer_scroll
+            );
+            let cell = cell.unwrap();
+            assert_eq!(
+                terminal.get_cursor_position().unwrap(),
+                Position::new(cell.column, cell.row),
+                "step {step}: caret not on cursor cell"
+            );
+        }
+    }
+
+    #[test]
+    fn viewer_selection_highlights_exactly_the_selected_source_range() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = format!(
+            "# Heading\n\n{}\n\nlast paragraph\n",
+            "wrapped words ".repeat(8)
+        );
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(120, 14)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &scan_tx);
+        for _ in 0..3 {
+            app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), &scan_tx);
+        }
+        for _ in 0..2 {
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &scan_tx);
+        }
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT), &scan_tx);
+        }
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+
+        let selection = app.viewer_selection().expect("selection");
+        assert!(app.content[selection.clone()].contains('\n'));
+        let buffer = terminal.backend().buffer();
+        for cell in &app.viewer_text_cells {
+            if cell.start == cell.end {
+                continue;
+            }
+            let rendered = buffer.cell((cell.column, cell.row)).unwrap();
+            let expected = cell.start >= selection.start && cell.end <= selection.end;
+            assert_eq!(
+                rendered.modifier.contains(Modifier::REVERSED),
+                expected,
+                "cell {:?} at {:?} rendered {:?}",
+                cell.start..cell.end,
+                (cell.column, cell.row),
+                rendered.symbol()
+            );
+        }
+    }
+
+    #[test]
+    fn viewer_arrow_keys_move_the_visible_cursor_and_shift_extends_selection() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = "first\nsecond".into();
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), &scan_tx);
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &scan_tx);
+
+        assert_eq!(app.viewer_cursor, 7);
+        assert_eq!(app.viewer_selection(), Some(1..7));
+
+        let mut terminal = Terminal::new(TestBackend::new(90, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let cursor_cell = app
+            .viewer_text_cells
+            .iter()
+            .find(|cell| cell.start == app.viewer_cursor)
+            .unwrap();
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(cursor_cell.column, cursor_cell.row)
+        );
+    }
+
+    #[test]
+    fn dragging_on_the_last_visible_viewer_line_does_not_shift_the_viewport() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = (0..20)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let bottom_row = app.viewer_area.bottom() - 2;
+        let start = app
+            .viewer_text_cells
+            .iter()
+            .find(|cell| cell.row == bottom_row - 1)
+            .copied()
+            .unwrap();
+        let end = app
+            .viewer_text_cells
+            .iter()
+            .find(|cell| cell.row == bottom_row)
+            .copied()
+            .unwrap();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: start.column,
+                row: start.row,
+                modifiers: KeyModifiers::NONE,
+            },
+            &scan_tx,
+        );
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: end.column,
+                row: end.row,
+                modifiers: KeyModifiers::NONE,
+            },
+            &scan_tx,
+        );
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+
+        assert_eq!(app.viewer_scroll, 0);
+        assert!(app.viewer_selection().is_some());
+    }
+
+    #[test]
+    fn mouse_selection_in_a_scrolled_viewer_starts_on_the_clicked_row() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = (0..30)
+            .map(|line| format!("line {line:02} {}", "selectable text ".repeat(8)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(120, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        app.viewer_scroll = 8;
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let selected_row = app.viewer_area.y + 3;
+        let row_cells = app
+            .viewer_text_cells
+            .iter()
+            .filter(|cell| cell.row == selected_row)
+            .copied()
+            .collect::<Vec<_>>();
+        let start = row_cells[2];
+        let end = row_cells[8];
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        for (kind, cell) in [
+            (MouseEventKind::Down(MouseButton::Left), start),
+            (MouseEventKind::Drag(MouseButton::Left), end),
+            (MouseEventKind::Up(MouseButton::Left), end),
+        ] {
+            app.handle_mouse(
+                MouseEvent {
+                    kind,
+                    column: cell.column,
+                    row: cell.row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &scan_tx,
+            );
+            terminal
+                .draw(|frame| crate::ui::draw(frame, &mut app))
+                .unwrap();
+        }
+
+        let buffer = terminal.backend().buffer();
+        assert!(
+            buffer
+                .cell((start.column, selected_row))
+                .unwrap()
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+        for row in app.viewer_area.y + 1..selected_row {
+            assert!(
+                !buffer
+                    .cell((start.column, row))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "selection unexpectedly starts on row {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn dragging_editor_text_selects_across_lines() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "alpha\nbeta").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.pane = Pane::Viewer;
+        app.editing = true;
+        let mut terminal = Terminal::new(TestBackend::new(90, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let start = app
+            .editor_text_cells
+            .iter()
+            .find(|cell| cell.start == 1)
+            .copied()
+            .unwrap();
+        let end = app
+            .editor_text_cells
+            .iter()
+            .find(|cell| cell.start == 8)
+            .copied()
+            .unwrap();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        for (kind, cell) in [
+            (MouseEventKind::Down(MouseButton::Left), start),
+            (MouseEventKind::Drag(MouseButton::Left), end),
+            (MouseEventKind::Up(MouseButton::Left), end),
+        ] {
+            app.handle_mouse(
+                MouseEvent {
+                    kind,
+                    column: cell.column,
+                    row: cell.row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &scan_tx,
+            );
+        }
+
+        assert_eq!(app.editor_selection(), Some(1..8));
+        assert_eq!(&app.content[app.editor_selection().unwrap()], "lpha\nbe");
     }
 
     #[test]

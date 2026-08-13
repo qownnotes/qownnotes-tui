@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each history entry's viewer and editor position.
 - Multiline text selection in the viewer and editor with `Shift` and the arrow
   keys, plus clipboard cut, copy, and paste with `Ctrl-X`, `Ctrl-C`, and `Ctrl-V`.
+- Mouse drag selection in the viewer and editor, including wrapped and scrolled text.
+- A visible viewer cursor with arrow-key navigation and `Shift-Arrow` selection.
 
 ## [0.3.0] - 2026-08-12
 

@@ -4,6 +4,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::Theme;
 
@@ -119,6 +120,50 @@ pub fn highlight_selection(
         })
         .collect::<Vec<_>>();
     Text::from(lines)
+}
+
+pub fn selection_metadata(source: &str) -> Text<'static> {
+    let mut line_offset = 0;
+    let lines = source
+        .split('\n')
+        .map(|line| {
+            let spans = line
+                .grapheme_indices(true)
+                .filter_map(|(offset, grapheme)| {
+                    let start = line_offset + offset;
+                    let end = start + grapheme.len();
+                    Some(Span::styled(
+                        grapheme.to_owned(),
+                        Style::default()
+                            .fg(encode_source_offset(start)?)
+                            .bg(encode_source_offset(end)?),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            line_offset += line.len() + 1;
+            Line::from(spans)
+        })
+        .collect::<Vec<_>>();
+    Text::from(lines)
+}
+
+pub fn decode_source_offset(color: Color) -> Option<usize> {
+    let Color::Rgb(red, green, blue) = color else {
+        return None;
+    };
+    let encoded = (usize::from(red) << 16) | (usize::from(green) << 8) | usize::from(blue);
+    encoded.checked_sub(1)
+}
+
+fn encode_source_offset(offset: usize) -> Option<Color> {
+    let encoded = offset.checked_add(1)?;
+    (encoded <= 0x00ff_ffff).then_some({
+        Color::Rgb(
+            ((encoded >> 16) & 0xff) as u8,
+            ((encoded >> 8) & 0xff) as u8,
+            (encoded & 0xff) as u8,
+        )
+    })
 }
 
 fn list_marker_end(line: &str) -> Option<usize> {
@@ -429,6 +474,22 @@ mod tests {
             .collect::<String>();
 
         assert_eq!(selected, "Headingplain `c");
+    }
+
+    #[test]
+    fn selection_metadata_tracks_grapheme_byte_ranges() {
+        let text = selection_metadata("a\u{301}b\n");
+
+        let first = &text.lines[0].spans[0];
+        assert_eq!(decode_source_offset(first.style.fg.unwrap()), Some(0));
+        assert_eq!(decode_source_offset(first.style.bg.unwrap()), Some(3));
+        let second = &text.lines[0].spans[1];
+        assert_eq!(decode_source_offset(second.style.fg.unwrap()), Some(3));
+        assert_eq!(decode_source_offset(second.style.bg.unwrap()), Some(4));
+        assert!(
+            text.lines[1].spans.is_empty(),
+            "empty source lines must stay empty so wrapping matches the rendered text"
+        );
     }
 
     #[test]

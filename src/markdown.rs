@@ -23,12 +23,16 @@ pub struct NoteLink {
 
 pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
     let mut in_fence = false;
-    let lines = source
-        .split('\n')
-        .map(|line| {
+    let mut previous_is_setext_title = false;
+    let source_lines = source.split('\n').collect::<Vec<_>>();
+    let lines = source_lines
+        .iter()
+        .enumerate()
+        .map(|(index, &line)| {
             let trimmed = line.trim_start();
             if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
                 in_fence = !in_fence;
+                previous_is_setext_title = false;
                 return Line::styled(
                     line.to_owned(),
                     Style::default()
@@ -37,15 +41,24 @@ pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
                 );
             }
             if in_fence {
+                previous_is_setext_title = false;
                 return Line::styled(line.to_owned(), Style::default().fg(theme.code.into()));
             }
-            if trimmed.starts_with('#')
-                && trimmed
-                    .trim_start_matches('#')
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace)
-            {
+            let is_setext_title = is_setext_title(line)
+                && source_lines
+                    .get(index + 1)
+                    .is_some_and(|line| is_setext_underline(line));
+            let is_setext_heading = previous_is_setext_title || is_setext_title;
+            previous_is_setext_title = is_setext_title;
+            if is_setext_heading {
+                return Line::styled(
+                    line.to_owned(),
+                    Style::default()
+                        .fg(theme.heading.into())
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            if is_atx_heading(trimmed) {
                 return Line::styled(
                     line.to_owned(),
                     Style::default()
@@ -93,6 +106,34 @@ pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
         })
         .collect::<Vec<_>>();
     Text::from(lines)
+}
+
+fn is_setext_title(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    !trimmed.is_empty()
+        && !is_setext_underline(line)
+        && !is_atx_heading(trimmed)
+        && !trimmed.starts_with('>')
+        && list_marker_end(line).is_none()
+}
+
+fn is_atx_heading(trimmed: &str) -> bool {
+    trimmed.starts_with('#')
+        && trimmed
+            .trim_start_matches('#')
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+}
+
+fn is_setext_underline(line: &str) -> bool {
+    let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indent > 3 {
+        return false;
+    }
+    let marker = line[indent..].trim_end_matches([' ', '\t']);
+    !marker.is_empty()
+        && (marker.bytes().all(|byte| byte == b'=') || marker.bytes().all(|byte| byte == b'-'))
 }
 
 pub fn highlight_selection(
@@ -492,6 +533,33 @@ mod tests {
         assert_eq!(text.lines[0].style.fg, Some(Color::Cyan));
         assert_eq!(text.lines[1].spans[0].style.fg, Some(Color::Yellow));
         assert_eq!(text.lines[3].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn highlights_setext_headings() {
+        let text = highlight(
+            "First level\n============\nSecond level\n---\n#Not ATX\n===",
+            &Theme::default(),
+        );
+
+        for line in &text.lines {
+            assert_eq!(line.style.fg, Some(Color::Cyan));
+            assert!(line.style.add_modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
+    fn does_not_highlight_setext_like_lines_outside_paragraphs() {
+        let text = highlight(
+            "---\n    Indented\n    ===\n```\nCode heading\n---\n```",
+            &Theme::default(),
+        );
+
+        assert_eq!(text.lines[0].style.fg, None);
+        assert_eq!(text.lines[1].style.fg, None);
+        assert_eq!(text.lines[2].style.fg, None);
+        assert_eq!(text.lines[4].style.fg, Some(Color::Green));
+        assert_eq!(text.lines[5].style.fg, Some(Color::Green));
     }
 
     #[test]

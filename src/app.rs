@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
+    process::{Command, Stdio},
     sync::mpsc::{self, Sender},
     thread,
     time::{Duration, Instant},
@@ -1077,12 +1078,30 @@ impl App {
     }
 
     fn open_note_link(&mut self, target: &NoteLinkTarget) {
+        if let NoteLinkTarget::Uri(uri) = target {
+            let result = Command::new(if cfg!(target_os = "macos") {
+                "open"
+            } else {
+                "xdg-open"
+            })
+            .arg(uri)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+            self.status = match result {
+                Ok(_) => format!("Opened link: {uri}"),
+                Err(error) => format!("Could not open link: {error}"),
+            };
+            return;
+        }
         let heading = match target {
             NoteLinkTarget::Path(target) => target.split_once('#').and_then(|(_, heading)| {
                 (!heading.is_empty())
                     .then(|| percent_decode_str(heading).decode_utf8_lossy().into_owned())
             }),
             NoteLinkTarget::Legacy(_) | NoteLinkTarget::Wiki(_) => None,
+            NoteLinkTarget::Uri(_) => unreachable!(),
         };
         let Some(relative) = self.resolve_note_link(target) else {
             self.status = "Linked note was not found".into();
@@ -1197,6 +1216,7 @@ impl App {
                     })
                     .map(|note| note.relative_path.clone())
             }
+            NoteLinkTarget::Uri(_) => None,
         }
     }
 

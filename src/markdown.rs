@@ -13,6 +13,7 @@ pub enum NoteLinkTarget {
     Path(String),
     Legacy(String),
     Wiki(String),
+    Uri(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -407,6 +408,8 @@ fn parse_line_links(line: &str, line_offset: usize, links: &mut Vec<NoteLink>) {
                 .trim_matches(['<', '>']);
             let target_kind = if target.starts_with("note://") {
                 Some(NoteLinkTarget::Legacy(target.to_owned()))
+            } else if is_web_uri(target) {
+                Some(NoteLinkTarget::Uri(target.to_owned()))
             } else if is_note_path(target) {
                 Some(NoteLinkTarget::Path(target.to_owned()))
             } else {
@@ -433,8 +436,25 @@ fn parse_line_links(line: &str, line_offset: usize, links: &mut Vec<NoteLink>) {
             index += length;
             continue;
         }
+        if let Some(length) = markdown_autolink_length(rest) {
+            let target = &rest[1..length - 1];
+            if is_web_uri(target) {
+                links.push(NoteLink {
+                    range: line_offset + index..line_offset + index + length,
+                    target: NoteLinkTarget::Uri(target.to_owned()),
+                });
+            }
+            index += length;
+            continue;
+        }
         index += rest.chars().next().map_or(1, char::len_utf8);
     }
+}
+
+fn is_web_uri(target: &str) -> bool {
+    target.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
 }
 
 fn is_note_path(target: &str) -> bool {
@@ -633,6 +653,22 @@ mod tests {
     }
 
     #[test]
+    fn finds_http_links_with_encoded_query_parameters() {
+        let source = "- [ ] all issues sorted by likes: <https://github.com/pbek/QOwnNotes/issues?q=is%3Aissue%20state%3Aopen%20sort%3Areactions-%2B1-desc>\n\
+                      - [x] bugs: <https://github.com/pbek/QOwnNotes/issues?q=state%3Aopen%20label%3A%22Type%3A%20Bug%22>";
+
+        let links = note_links(source);
+
+        assert_eq!(
+            links.iter().map(|link| &link.target).collect::<Vec<_>>(),
+            [
+                &NoteLinkTarget::Uri("https://github.com/pbek/QOwnNotes/issues?q=is%3Aissue%20state%3Aopen%20sort%3Areactions-%2B1-desc".into()),
+                &NoteLinkTarget::Uri("https://github.com/pbek/QOwnNotes/issues?q=state%3Aopen%20label%3A%22Type%3A%20Bug%22".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn highlights_a_multiline_selection_over_markdown_styles() {
         let text = highlight_selection(
             "# Heading\nplain `code` text",
@@ -674,13 +710,14 @@ mod tests {
 
         let links = note_links(source);
 
-        assert_eq!(links.len(), 3);
+        assert_eq!(links.len(), 4);
         assert_eq!(
             links.iter().map(|link| &link.target).collect::<Vec<_>>(),
             [
                 &NoteLinkTarget::Path("folder/Note%20one.md#Part".into()),
                 &NoteLinkTarget::Wiki("Other#Heading|label".into()),
                 &NoteLinkTarget::Legacy("note://Legacy_note".into()),
+                &NoteLinkTarget::Uri("https://example.com".into()),
             ]
         );
     }

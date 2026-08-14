@@ -4,6 +4,8 @@
 QOwnNotes-compatible Markdown note folders.
 See [`CHANGELOG.md`](CHANGELOG.md) for notable changes.
 
+![qownnotes-tui screenshot](screenshot.webp)
+
 ## Run
 
 Enter the development environment and open a note folder:

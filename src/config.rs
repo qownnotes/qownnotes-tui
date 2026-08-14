@@ -38,6 +38,8 @@ struct FileConfig {
     notes_dir: Option<PathBuf>,
     #[serde(default)]
     selected_note_folder: Option<PathBuf>,
+    #[serde(default)]
+    selected_note: Option<PathBuf>,
     #[serde(default = "default_save_interval_seconds")]
     save_interval_seconds: u64,
 }
@@ -47,6 +49,7 @@ impl Default for FileConfig {
         Self {
             notes_dir: None,
             selected_note_folder: None,
+            selected_note: None,
             save_interval_seconds: default_save_interval_seconds(),
         }
     }
@@ -130,6 +133,21 @@ pub fn selected_note_folder(value: &Path) -> anyhow::Result<()> {
     let mut file = load_file()?;
     file.selected_note_folder = Some(value.to_path_buf());
     save_file(&file)
+}
+
+pub fn remembered_note(root: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let file = load_file()?;
+    Ok(relative_selected_note(root, file.selected_note.as_deref()))
+}
+
+pub fn selected_note(root: &Path, relative: Option<&Path>) -> anyhow::Result<()> {
+    let mut file = load_file()?;
+    file.selected_note = relative.map(|relative| root.join(relative));
+    save_file(&file)
+}
+
+fn relative_selected_note(root: &Path, selected: Option<&Path>) -> Option<PathBuf> {
+    selected?.strip_prefix(root).ok().map(Path::to_path_buf)
 }
 
 fn save_file(file: &FileConfig) -> anyhow::Result<()> {
@@ -349,12 +367,18 @@ mod tests {
     #[test]
     fn reads_the_selected_note_folder_from_the_app_config() {
         let file: FileConfig =
-            toml::from_str("selected_note_folder = '/notes/work'\nsave_interval_seconds = 10\n")
-                .unwrap();
+            toml::from_str(
+                "selected_note_folder = '/notes/work'\nselected_note = '/notes/work/todo.md'\nsave_interval_seconds = 10\n",
+            )
+            .unwrap();
 
         assert_eq!(
             file.selected_note_folder,
             Some(PathBuf::from("/notes/work"))
+        );
+        assert_eq!(
+            file.selected_note,
+            Some(PathBuf::from("/notes/work/todo.md"))
         );
     }
 
@@ -378,6 +402,24 @@ mod tests {
         assert_eq!(
             selected_folder_index(&folders, Some(Path::new("/notes/missing")), 0),
             0
+        );
+    }
+
+    #[test]
+    fn restores_only_notes_inside_the_active_folder() {
+        assert_eq!(
+            relative_selected_note(
+                Path::new("/notes/work"),
+                Some(Path::new("/notes/work/projects/todo.md"))
+            ),
+            Some(PathBuf::from("projects/todo.md"))
+        );
+        assert_eq!(
+            relative_selected_note(
+                Path::new("/notes/work"),
+                Some(Path::new("/notes/personal/todo.md"))
+            ),
+            None
         );
     }
 }

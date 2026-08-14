@@ -100,6 +100,7 @@ pub struct App {
     pub note_list_offset: usize,
     note_history: Vec<NoteHistoryEntry>,
     note_history_index: Option<usize>,
+    remembered_note: Option<PathBuf>,
     persisted_content: String,
     dirty: bool,
     dirty_since: Option<Instant>,
@@ -158,6 +159,7 @@ impl App {
             note_list_offset: 0,
             note_history: Vec::new(),
             note_history_index: None,
+            remembered_note: None,
             persisted_content: String::new(),
             dirty: false,
             dirty_since: None,
@@ -345,6 +347,10 @@ impl App {
     }
 
     fn apply_search(&mut self) {
+        let selected_path = self
+            .current_note
+            .clone()
+            .or_else(|| self.remembered_note.take());
         let terms = search_terms(&self.search_query);
         self.notes = if terms.is_empty() {
             self.all_notes.clone()
@@ -355,7 +361,13 @@ impl App {
                 .cloned()
                 .collect()
         };
-        self.selected_note = 0;
+        self.selected_note = selected_path
+            .and_then(|path| {
+                self.notes
+                    .iter()
+                    .position(|note| note.relative_path == path)
+            })
+            .unwrap_or(0);
         self.note_list_offset = 0;
         if self.notes.is_empty() {
             self.capture_note_position();
@@ -1500,7 +1512,9 @@ impl App {
 
 pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
     let (scan_tx, scan_rx) = mpsc::channel();
+    let remembered_note = config::remembered_note(&config.note_folders[config.active_folder].path)?;
     let mut app = App::new(config);
+    app.remembered_note = remembered_note;
     app.start_scan(&scan_tx);
     let events = Events::new(scan_rx);
 
@@ -1516,7 +1530,7 @@ pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
             Event::Resize => {}
         }
     }
-    Ok(())
+    config::selected_note(app.root(), app.current_note.as_deref())
 }
 
 fn spawn_scan(folder: usize, root: PathBuf, sender: Sender<ScanResult>) {
@@ -2515,6 +2529,31 @@ mod tests {
         assert_eq!(app.content, "previewed");
         assert_eq!(app.current_note.as_deref(), Some(Path::new("note.md")));
         assert_eq!(app.pane, Pane::Notes);
+    }
+
+    #[test]
+    fn completed_scan_restores_the_remembered_note() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.md"), "first").unwrap();
+        fs::write(root.path().join("second.md"), "second").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.remembered_note = Some("second.md".into());
+
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+
+        assert_eq!(app.selected_note, 1);
+        assert_eq!(app.content, "second");
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("second.md")));
+        assert!(app.remembered_note.is_none());
     }
 
     #[test]

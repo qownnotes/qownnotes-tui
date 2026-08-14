@@ -307,8 +307,7 @@ fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
                 }
             }
         }
-        if let Some(end) = text.strip_prefix("<note://").and_then(|_| text.find('>')) {
-            let length = end + 1;
+        if let Some(length) = markdown_autolink_length(text) {
             spans.push(Span::styled(
                 text[..length].to_owned(),
                 Style::default()
@@ -340,6 +339,22 @@ fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
         text = &text[length..];
     }
     spans
+}
+
+fn markdown_autolink_length(text: &str) -> Option<usize> {
+    let destination = text.strip_prefix('<')?;
+    let end = destination.find('>')?;
+    let destination = &destination[..end];
+    let (scheme, _) = destination.split_once(':')?;
+    let valid_scheme = (2..=32).contains(&scheme.len())
+        && scheme.starts_with(|character: char| character.is_ascii_alphabetic())
+        && scheme.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        });
+    let valid_destination = destination.chars().all(|character| {
+        !character.is_ascii_control() && !character.is_ascii_whitespace() && character != '<'
+    });
+    (valid_scheme && valid_destination).then_some(end + 2)
 }
 
 pub fn note_links(source: &str) -> Vec<NoteLink> {
@@ -593,6 +608,28 @@ mod tests {
                 .iter()
                 .all(|span| span.style.fg.is_none())
         );
+    }
+
+    #[test]
+    fn highlights_markdown_uri_autolinks() {
+        let text = highlight(
+            "See <https://github.com/pbek/QOwnNotes/issues/3690> and <span>.",
+            &Theme::default(),
+        );
+
+        assert_eq!(
+            text.lines[0].spans[1].content,
+            "<https://github.com/pbek/QOwnNotes/issues/3690>"
+        );
+        assert_eq!(text.lines[0].spans[1].style.fg, Some(Color::LightBlue));
+        assert!(
+            text.lines[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
+        );
+        assert_eq!(text.lines[0].spans[3].content, "<");
+        assert_eq!(text.lines[0].spans[3].style.fg, None);
     }
 
     #[test]

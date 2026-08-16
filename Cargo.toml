@@ -4,7 +4,7 @@ version = "0.5.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A keyboard-first terminal browser for QOwnNotes-compatible note folders"
-license = "GPL-2.0-only"
+license = "GPL-3.0-only"
 repository = "https://github.com/qownnotes/qownnotes-tui"
 
 [dependencies]

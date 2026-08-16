@@ -46,7 +46,7 @@
           meta = {
             description = "Keyboard-first terminal browser for QOwnNotes-compatible note folders";
             homepage = "https://github.com/qownnotes/qownnotes-tui";
-            license = pkgs.lib.licenses.gpl2Only;
+            license = pkgs.lib.licenses.gpl3Only;
             mainProgram = "qownnotes-tui";
             platforms = pkgs.lib.platforms.unix;
           };

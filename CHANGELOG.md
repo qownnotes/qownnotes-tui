@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Relicensed under GPL-3.0-only; the `LICENSE` file now contains the complete
+  license text.
+
 ## [0.5.0] - 2026-08-15
 
 ### Added

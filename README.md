@@ -129,5 +129,5 @@ Rust 1.85 is the minimum supported version. The crate uses Rust edition 2024.
 
 ## License
 
-Copyright (C) 2026 qownnotes-tui contributors. Licensed under GPL-2.0-only. See
+Copyright (C) 2026 qownnotes-tui contributors. Licensed under GPL-3.0-only. See
 [`LICENSE`](LICENSE).

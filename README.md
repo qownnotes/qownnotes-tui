@@ -6,6 +6,12 @@ See [`CHANGELOG.md`](CHANGELOG.md) for notable changes.
 
 ![qownnotes-tui screenshot](screenshot.webp)
 
+## Install
+
+Prebuilt binaries for Linux, Windows, and macOS are attached to every release
+on the
+[GitHub releases page](https://github.com/qownnotes/qownnotes-tui/releases).
+
 ## Run
 
 Enter the development environment and open a note folder:

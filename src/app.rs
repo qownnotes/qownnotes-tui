@@ -256,6 +256,14 @@ impl App {
                 _ => {}
             }
         }
+        if self.pane == Pane::Viewer
+            && self.current_note.is_some()
+            && key.code == KeyCode::Char(' ')
+            && key.modifiers == KeyModifiers::CONTROL
+        {
+            self.activate_viewer_position();
+            return;
+        }
         if self.pane == Pane::Viewer {
             match key.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
@@ -398,6 +406,11 @@ impl App {
     fn handle_editor_key(&mut self, key: KeyEvent) {
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.save_note();
+            return;
+        }
+        if key.code == KeyCode::Char(' ') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.editor_selection_anchor = None;
+            self.toggle_checkbox_at(self.editor_cursor);
             return;
         }
         if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1087,6 +1100,67 @@ impl App {
             }
             Err(error) => self.status = error.to_string(),
         }
+    }
+
+    fn activate_viewer_position(&mut self) {
+        let cursor = self.viewer_cursor;
+        let target = self
+            .viewer_links
+            .iter()
+            .find(|link| link.range.start <= cursor && cursor <= link.range.end)
+            .map(|link| link.target.clone());
+        if let Some(target) = target {
+            self.open_note_link(&target);
+            return;
+        }
+        if self.toggle_checkbox_at(cursor) {
+            return;
+        }
+        self.status = "No link or checkbox at the cursor".into();
+    }
+
+    fn toggle_checkbox_at(&mut self, cursor: usize) -> bool {
+        let cursor = cursor.min(self.content.len());
+        let line_start = self.content[..cursor]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let line_end = self.content[cursor..]
+            .find('\n')
+            .map_or(self.content.len(), |index| cursor + index);
+        let line = &self.content[line_start..line_end];
+        let Some(bracket) = ["[ ]", "[-]", "[x]", "[X]"]
+            .iter()
+            .filter_map(|marker| line.find(marker))
+            .min()
+        else {
+            return false;
+        };
+        if !line[..bracket].trim_start().chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, '-' | '+' | '*' | '.' | ' ')
+        }) {
+            return false;
+        }
+        if line[bracket + 3..]
+            .chars()
+            .next()
+            .is_some_and(|character| !character.is_whitespace())
+        {
+            return false;
+        }
+        // A partial [-] checkbox completes like an unchecked one.
+        let checked = line[bracket..].starts_with("[x]") || line[bracket..].starts_with("[X]");
+        let replacement = if checked { " " } else { "x" };
+        self.content.replace_range(
+            line_start + bracket + 1..line_start + bracket + 2,
+            replacement,
+        );
+        self.mark_dirty();
+        self.status = if checked {
+            "Checkbox unchecked".into()
+        } else {
+            "Checkbox checked".into()
+        };
+        true
     }
 
     fn open_note_link(&mut self, target: &NoteLinkTarget) {
@@ -3003,5 +3077,199 @@ mod tests {
         assert_eq!(notes[0].relative_path, Path::new("Alpha.md"));
         sort_notes(&mut notes, NoteSort::Alphabetical { descending: true });
         assert_eq!(notes[0].relative_path, Path::new("zebra.md"));
+    }
+
+    #[test]
+    fn control_space_opens_the_note_link_at_the_viewer_cursor() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Source.md"),
+            "See [target](Target.md) now.",
+        )
+        .unwrap();
+        fs::write(root.path().join("Target.md"), "target content").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.selected_note = app
+            .notes
+            .iter()
+            .position(|note| note.relative_path == Path::new("Source.md"))
+            .unwrap();
+        app.load_selected_note();
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(90, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let link = app.viewer_links[0].clone();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.viewer_cursor = link.range.start + 1;
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("Target.md")));
+        assert_eq!(app.content, "target content");
+        assert_eq!(app.pane, Pane::Viewer);
+
+        // "target content" has no link or checkbox at the cursor
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        assert_eq!(app.status, "No link or checkbox at the cursor");
+    }
+
+    #[test]
+    fn control_space_prefers_the_link_over_the_checkbox_on_a_task_line() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Source.md"),
+            "- [ ] visit [target](Target.md) today",
+        )
+        .unwrap();
+        fs::write(root.path().join("Target.md"), "target content").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.selected_note = app
+            .notes
+            .iter()
+            .position(|note| note.relative_path == Path::new("Source.md"))
+            .unwrap();
+        app.load_selected_note();
+        app.pane = Pane::Viewer;
+        let mut terminal = Terminal::new(TestBackend::new(90, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let link = app.viewer_links[0].clone();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        // Inside the link range the link is opened, not the checkbox toggled.
+        app.viewer_cursor = link.range.start + 1;
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("Target.md")));
+
+        // Outside the link range on the same task line the checkbox toggles.
+        app.navigate_note_history(-1);
+        app.viewer_cursor = app.content.find("today").unwrap();
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("Source.md")));
+        assert!(app.content.contains("- [x] visit"));
+    }
+
+    #[test]
+    fn control_space_toggles_the_checkbox_at_the_viewer_cursor() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "# Tasks\n- [ ] pending\n- [-] partial\n- [x] done\nplain [ ] text",
+        )
+        .unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.pane = Pane::Viewer;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.viewer_cursor = app.content.find("pending").unwrap();
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        assert!(app.content.contains("- [x] pending"));
+        assert!(app.dirty);
+
+        app.viewer_cursor = app.content.find("partial").unwrap();
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        assert!(app.content.contains("- [x] partial"));
+
+        app.viewer_cursor = app.content.find("[x] pending").unwrap() + 1;
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        assert!(app.content.contains("- [ ] pending"));
+
+        app.viewer_cursor = app.content.find("done").unwrap();
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        assert!(app.content.contains("- [ ] done"));
+
+        app.viewer_cursor = app.content.rfind("[ ]").unwrap();
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        assert!(app.content.ends_with("plain [ ] text"));
+        assert_eq!(app.status, "No link or checkbox at the cursor");
+    }
+
+    #[test]
+    fn control_space_toggles_the_checkbox_at_the_editor_cursor() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.content = "- [ ] task".into();
+        app.persisted_content.clone_from(&app.content);
+        app.editing = true;
+        app.editor_cursor = app.content.len();
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+
+        assert_eq!(app.content, "- [x] task");
+        assert!(app.dirty);
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+
+        assert_eq!(app.content, "- [ ] task");
     }
 }

@@ -48,26 +48,27 @@ command writes the completion script to standard output.
 
 ## Keys
 
-| Key                     | Action                                  |
-| ----------------------- | --------------------------------------- |
-| `j`, `k`                | Move selection or scroll the viewer     |
-| `PageUp`, `PageDown`    | Scroll the viewer by one page           |
-| `Home`, `End`           | Jump to the start or end of the note    |
-| `h`, `l`, `Tab`         | Switch panes                            |
-| `Enter`                 | Activate a note folder or open a note   |
-| `n`, `Ctrl-n`           | Create a timestamped note               |
-| `d`                     | Delete a note after confirmation        |
-| `e`                     | Edit the selected note                  |
-| `/`                     | Search note names and text              |
-| `Ctrl-s`                | Save the note                           |
-| `Esc`                   | Leave editor or return to the note list |
-| `Ctrl-r`                | Discard edits and reload from disk      |
-| `PageUp`, `PageDown`    | Move by one page while editing          |
-| `Ctrl-Home`, `Ctrl-End` | Move to note start or end while editing |
-| `s`                     | Open settings                           |
-| `R`                     | Rescan the active note folder           |
-| `?`                     | Show help                               |
-| `q`, `Ctrl-c`           | Quit                                    |
+| Key                     | Action                                             |
+| ----------------------- | -------------------------------------------------- |
+| `j`, `k`                | Move selection or scroll the viewer                |
+| `PageUp`, `PageDown`    | Scroll the viewer by one page                      |
+| `Home`, `End`           | Jump to the start or end of the note               |
+| `h`, `l`, `Tab`         | Switch panes                                       |
+| `Enter`                 | Activate a note folder or open a note              |
+| `Ctrl-Space`            | Open the link or toggle the checkbox at the cursor |
+| `n`, `Ctrl-n`           | Create a timestamped note                          |
+| `d`                     | Delete a note after confirmation                   |
+| `e`                     | Edit the selected note                             |
+| `/`                     | Search note names and text                         |
+| `Ctrl-s`                | Save the note                                      |
+| `Esc`                   | Leave editor or return to the note list            |
+| `Ctrl-r`                | Discard edits and reload from disk                 |
+| `PageUp`, `PageDown`    | Move by one page while editing                     |
+| `Ctrl-Home`, `Ctrl-End` | Move to note start or end while editing            |
+| `s`                     | Open settings                                      |
+| `R`                     | Rescan the active note folder                      |
+| `?`                     | Show help                                          |
+| `q`, `Ctrl-c`           | Quit                                               |
 
 Search terms are case-insensitive and all terms must match; use quotes to search
 for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The

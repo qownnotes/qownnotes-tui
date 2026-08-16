@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `--session` option to use a separate QOwnNotes settings and database
   context, matching QOwnNotes' `--session` argument; the `nix-run` and
   `nix-build-run` Just recipes now use the `test` session by default.
+- `Ctrl-Space` opens the link at the viewer cursor or toggles the checkbox at
+  the cursor in the viewer and editor.
 
 ### Changed
 

@@ -411,7 +411,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let help = if app.loading {
         " scanning "
     } else if app.editing {
-        " Shift-arrows select  Ctrl-x/c/v cut/copy/paste  Ctrl-s save  Esc close "
+        " Shift-arrows select  Ctrl-Space toggle checkbox  Ctrl-x/c/v cut/copy/paste  Ctrl-s save  Esc close "
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
         " n new  d delete  / search  e edit  j/k scroll  s settings  ? help  q quit "
     } else {
@@ -446,6 +446,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Tab/Shift-Tab  next or previous pane\n\
              Alt-Left/Right  back or forward in note history\n\
              Enter       activate note folder or focus viewer\n\
+             Ctrl-Space  open link or toggle checkbox at the cursor\n\
              Mouse       select text, activate items/links, or scroll panes\n\
              /           search note names and text\n\
              n / Ctrl-n  create a timestamped note\n\

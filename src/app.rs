@@ -300,8 +300,7 @@ impl App {
                 if matches!(self.pane, Pane::Notes | Pane::Viewer)
                     && self.current_note.is_some() =>
             {
-                self.editing = true;
-                self.status = "Editing note".into();
+                self.start_editing();
             }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
@@ -446,6 +445,9 @@ impl App {
                 self.save_note();
                 if !self.dirty {
                     self.editing = false;
+                    self.viewer_cursor = self.editor_cursor;
+                    self.viewer_selection_anchor = None;
+                    self.viewer_follow_selection = true;
                     self.status = self
                         .current_note
                         .as_ref()
@@ -621,6 +623,19 @@ impl App {
                 text.chars().count()
             )
         };
+    }
+
+    fn start_editing(&mut self) {
+        if self.pane == Pane::Viewer {
+            self.editor_cursor = self.viewer_cursor.min(self.content.len());
+            while !self.content.is_char_boundary(self.editor_cursor) {
+                self.editor_cursor -= 1;
+            }
+            self.editor_selection_anchor = self.viewer_selection_anchor;
+            self.editor_scroll = self.viewer_scroll;
+        }
+        self.editing = true;
+        self.status = "Editing note".into();
     }
 
     fn insert_editor_text(&mut self, text: &str) {
@@ -1352,8 +1367,8 @@ impl App {
                 self.note_list_offset = 0;
                 if self.load_selected_note() {
                     self.pane = Pane::Viewer;
-                    self.editing = true;
                     self.editor_cursor = self.content.len();
+                    self.start_editing();
                     self.editor_scroll = 0;
                     self.editor_horizontal_scroll = 0;
                     self.status = format!("Created {}", relative.display());
@@ -2689,6 +2704,43 @@ mod tests {
         assert!(app.editing);
         assert_eq!(app.editor_cursor, app.content.len());
         assert_eq!(app.pane, Pane::Notes);
+    }
+
+    #[test]
+    fn editing_from_the_viewer_keeps_the_cursor_position() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "first\nsecond\nthird").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.pane = Pane::Viewer;
+        app.viewer_cursor = 8;
+        app.viewer_selection_anchor = Some(2);
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+            &scan_tx,
+        );
+
+        assert!(app.editing);
+        assert_eq!(app.editor_cursor, 8);
+        assert_eq!(app.editor_selection(), Some(2..8));
+
+        app.handle_editor_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_editor_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(!app.editing);
+        assert_eq!(app.viewer_cursor, 9);
+        assert!(app.viewer_selection().is_none());
     }
 
     #[test]

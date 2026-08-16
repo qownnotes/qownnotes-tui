@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nix-build-run` Just recipes now use the `test` session by default.
 - `Ctrl-Space` opens the link at the viewer cursor or toggles the checkbox at
   the cursor in the viewer and editor.
+- Entering edit mode from the viewer keeps the cursor position and selection,
+  and leaving the editor returns the cursor position to the viewer.
 
 ### Changed
 

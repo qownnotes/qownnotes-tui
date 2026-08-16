@@ -63,8 +63,10 @@ impl Config {
     pub fn load(cli: &Cli) -> anyhow::Result<Self> {
         let file = load_file()?;
         let save_interval_seconds = file.save_interval_seconds.max(1);
-        let note_sort = qownnotes_settings_path()
-            .and_then(|path| fs::read_to_string(path).ok())
+        let qownnotes = qownnotes_paths(cli.session.as_deref());
+        let note_sort = qownnotes
+            .as_ref()
+            .and_then(|paths| fs::read_to_string(&paths.settings).ok())
             .map_or(NoteSort::LastModified, |settings| {
                 note_sort_from_qsettings(&settings)
             });
@@ -89,11 +91,14 @@ impl Config {
             });
         }
 
-        let (note_folders, qownnotes_active_folder) = discover_qownnotes_note_folders().context(
-            "no note root configured; pass --notes-dir PATH, set \
-             QOWNNOTES_TUI_NOTES_DIR, add notes_dir to the configuration file, \
-             or configure a note folder in QOwnNotes",
-        )?;
+        let (note_folders, qownnotes_active_folder) = qownnotes
+            .as_ref()
+            .and_then(discover_qownnotes_note_folders)
+            .context(
+                "no note root configured; pass --notes-dir PATH, set \
+                 QOWNNOTES_TUI_NOTES_DIR, add notes_dir to the configuration file, \
+                 or configure a note folder in QOwnNotes",
+            )?;
         let active_folder = selected_folder_index(
             &note_folders,
             file.selected_note_folder.as_deref(),
@@ -160,15 +165,27 @@ fn save_file(file: &FileConfig) -> anyhow::Result<()> {
     fs::write(&path, contents).with_context(|| format!("cannot write {}", path.display()))
 }
 
-fn discover_qownnotes_note_folders() -> Option<(Vec<NoteFolder>, usize)> {
-    let dirs = BaseDirs::new()?;
-    let settings_path = qownnotes_settings_path()?;
-    let database_path = dirs.data_dir().join("PBE/QOwnNotes/QOwnNotes.sqlite");
-    discover_from_qownnotes(&settings_path, &database_path).ok()
+/// Locations of the QOwnNotes settings file and database for an optional
+/// session name, mirroring QOwnNotes' `--session` handling.
+pub struct QOwnNotesPaths {
+    pub settings: PathBuf,
+    pub database: PathBuf,
 }
 
-fn qownnotes_settings_path() -> Option<PathBuf> {
-    Some(BaseDirs::new()?.config_dir().join("PBE/QOwnNotes.conf"))
+fn qownnotes_paths(session: Option<&str>) -> Option<QOwnNotesPaths> {
+    let dirs = BaseDirs::new()?;
+    let app = match session {
+        Some(session) => format!("QOwnNotes-{session}"),
+        None => "QOwnNotes".to_string(),
+    };
+    Some(QOwnNotesPaths {
+        settings: dirs.config_dir().join(format!("PBE/{app}.conf")),
+        database: dirs.data_dir().join(format!("PBE/{app}/QOwnNotes.sqlite")),
+    })
+}
+
+fn discover_qownnotes_note_folders(paths: &QOwnNotesPaths) -> Option<(Vec<NoteFolder>, usize)> {
+    discover_from_qownnotes(&paths.settings, &paths.database).ok()
 }
 
 fn note_sort_from_qsettings(settings: &str) -> NoteSort {
@@ -341,6 +358,31 @@ mod tests {
                 name: "Active".into(),
                 path: active
             }
+        );
+    }
+
+    #[test]
+    fn resolves_qownnotes_paths_per_session() {
+        let dirs = BaseDirs::new().unwrap();
+
+        let default = qownnotes_paths(None).unwrap();
+        assert_eq!(
+            default.settings,
+            dirs.config_dir().join("PBE/QOwnNotes.conf")
+        );
+        assert_eq!(
+            default.database,
+            dirs.data_dir().join("PBE/QOwnNotes/QOwnNotes.sqlite")
+        );
+
+        let session = qownnotes_paths(Some("test")).unwrap();
+        assert_eq!(
+            session.settings,
+            dirs.config_dir().join("PBE/QOwnNotes-test.conf")
+        );
+        assert_eq!(
+            session.database,
+            dirs.data_dir().join("PBE/QOwnNotes-test/QOwnNotes.sqlite")
         );
     }
 

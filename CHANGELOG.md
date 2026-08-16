@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A `--session` option to use a separate QOwnNotes settings and database
+  context, matching QOwnNotes' `--session` argument; the `nix-run` and
+  `nix-build-run` Just recipes now use the `test` session by default.
+
 ### Changed
 
 - Relicensed under GPL-3.0-only; the `LICENSE` file now contains the complete

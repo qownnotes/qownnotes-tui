@@ -304,8 +304,8 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
-            KeyCode::PageDown => self.scroll_viewer(self.viewer_page_size as isize),
-            KeyCode::PageUp => self.scroll_viewer(-(self.viewer_page_size as isize)),
+            KeyCode::PageDown => self.move_viewer_page(1),
+            KeyCode::PageUp => self.move_viewer_page(-1),
             KeyCode::Home if self.pane == Pane::Viewer => {
                 self.viewer_cursor = 0;
                 self.viewer_selection_anchor = None;
@@ -938,10 +938,20 @@ impl App {
     }
 
     fn scroll_viewer(&mut self, delta: isize) {
+        self.viewer_follow_selection = false;
         self.viewer_scroll = self
             .viewer_scroll
             .saturating_add_signed(delta.clamp(i16::MIN as isize, i16::MAX as isize) as i16)
             .min(self.viewer_max_scroll);
+    }
+
+    fn move_viewer_page(&mut self, direction: isize) {
+        self.viewer_selection_anchor = None;
+        for _ in 0..self.viewer_page_size {
+            self.viewer_cursor = move_vertical(&self.content, self.viewer_cursor, direction);
+        }
+        self.scroll_viewer(direction * self.viewer_page_size as isize);
+        self.viewer_follow_selection = true;
     }
 
     fn open_selection(&mut self, scans: &Sender<ScanResult>) {
@@ -1906,6 +1916,39 @@ mod tests {
         assert_eq!(app.viewer_scroll, 10);
         app.scroll_viewer(-20);
         assert_eq!(app.viewer_scroll, 0);
+    }
+
+    #[test]
+    fn viewer_page_keys_scroll_and_move_the_cursor() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.pane = Pane::Viewer;
+        app.content = "zero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight".into();
+        app.viewer_cursor = "ze".len();
+        app.viewer_page_size = 3;
+        app.viewer_max_scroll = 10;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+            &scan_tx,
+        );
+        assert_eq!(app.viewer_scroll, 3);
+        assert_eq!(&app.content[..app.viewer_cursor], "zero\none\ntwo\nth");
+        assert!(app.viewer_follow_selection);
+
+        app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), &scan_tx);
+        assert_eq!(app.viewer_scroll, 0);
+        assert_eq!(&app.content[..app.viewer_cursor], "ze");
+        assert!(app.viewer_follow_selection);
     }
 
     #[test]

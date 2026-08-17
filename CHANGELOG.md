@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `PageUp` and `PageDown` now move the viewer cursor while scrolling and no
+  longer reset the viewport to its previous position.
+
 ## [0.6.0] - 2026-08-16
 
 ### Added

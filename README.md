@@ -1,7 +1,7 @@
 # qownnotes-tui
 
 `qownnotes-tui` is a keyboard-first terminal browser and editor for local,
-QOwnNotes-compatible Markdown note folders.
+[QOwnNotes](https://www.qownnotes.org/)-compatible Markdown note folders.
 See [`CHANGELOG.md`](CHANGELOG.md) for notable changes.
 
 ![qownnotes-tui screenshot](screenshot.webp)

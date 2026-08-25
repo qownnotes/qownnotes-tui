@@ -16,6 +16,7 @@ pub struct Config {
     pub note_folders: Vec<NoteFolder>,
     pub active_folder: usize,
     pub note_sort: NoteSort,
+    pub ignored_subfolder_patterns: Vec<String>,
     pub save_interval_seconds: u64,
     pub theme: Theme,
 }
@@ -24,6 +25,7 @@ pub struct Config {
 pub struct NoteFolder {
     pub name: String,
     pub path: PathBuf,
+    pub show_subfolders: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,12 +66,13 @@ impl Config {
         let file = load_file()?;
         let save_interval_seconds = file.save_interval_seconds.max(1);
         let qownnotes = qownnotes_paths(cli.session.as_deref());
-        let note_sort = qownnotes
+        let qownnotes_settings = qownnotes
             .as_ref()
             .and_then(|paths| fs::read_to_string(&paths.settings).ok())
-            .map_or(NoteSort::LastModified, |settings| {
-                note_sort_from_qsettings(&settings)
-            });
+            .unwrap_or_default();
+        let note_sort = note_sort_from_qsettings(&qownnotes_settings);
+        let ignored_subfolder_patterns =
+            ignored_subfolder_patterns_from_qsettings(&qownnotes_settings);
         if let Some(notes_dir) = cli.notes_dir.clone().or(file.notes_dir.clone()) {
             let path = notes_dir
                 .canonicalize()
@@ -83,9 +86,14 @@ impl Config {
                 .to_string_lossy()
                 .into_owned();
             return Ok(Self {
-                note_folders: vec![NoteFolder { name, path }],
+                note_folders: vec![NoteFolder {
+                    name,
+                    path,
+                    show_subfolders: true,
+                }],
                 active_folder: 0,
                 note_sort,
+                ignored_subfolder_patterns,
                 save_interval_seconds,
                 theme: Theme::default(),
             });
@@ -108,6 +116,7 @@ impl Config {
             note_folders,
             active_folder,
             note_sort,
+            ignored_subfolder_patterns,
             save_interval_seconds,
             theme: Theme::default(),
         })
@@ -197,6 +206,17 @@ fn note_sort_from_qsettings(settings: &str) -> NoteSort {
     }
 }
 
+fn ignored_subfolder_patterns_from_qsettings(settings: &str) -> Vec<String> {
+    qsettings_value(settings, "ignoreNoteSubFolders")
+        .unwrap_or(r"^\.")
+        .replace(r"\\", r"\")
+        .split(';')
+        .map(str::trim)
+        .filter(|pattern| !pattern.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 fn discover_from_qownnotes(
     settings_path: &std::path::Path,
     database_path: &std::path::Path,
@@ -210,14 +230,29 @@ fn discover_from_qownnotes(
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .with_context(|| format!("cannot open QOwnNotes database {}", database_path.display()))?;
-    let mut query = connection
-        .prepare("SELECT id, name, local_path FROM noteFolder ORDER BY priority ASC, id ASC")?;
+    let has_show_subfolders = connection
+        .prepare("PRAGMA table_info(noteFolder)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|column| column == "show_subfolders");
+    let show_subfolders = if has_show_subfolders {
+        "show_subfolders"
+    } else {
+        "0 AS show_subfolders"
+    };
+    let sql = format!(
+        "SELECT id, name, local_path, {show_subfolders} \
+         FROM noteFolder ORDER BY priority ASC, id ASC"
+    );
+    let mut query = connection.prepare(&sql)?;
     let folders = query
         .query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 PathBuf::from(row.get::<_, String>(2)?),
+                row.get::<_, bool>(3)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -234,7 +269,7 @@ fn discover_from_qownnotes(
     };
     let mut available = Vec::new();
     let mut active_folder = None;
-    for (id, name, stored_path) in folders {
+    for (id, name, stored_path, show_subfolders) in folders {
         let path = resolve(&stored_path);
         if !path.is_dir() {
             continue;
@@ -254,7 +289,11 @@ fn discover_from_qownnotes(
         } else {
             name
         };
-        available.push(NoteFolder { name, path });
+        available.push(NoteFolder {
+            name,
+            path,
+            show_subfolders,
+        });
     }
     if available.is_empty() {
         bail!("QOwnNotes has no available configured note folders");
@@ -322,19 +361,20 @@ mod tests {
                     id INTEGER PRIMARY KEY,
                     name TEXT,
                     local_path TEXT,
+                    show_subfolders INTEGER NOT NULL DEFAULT 0,
                     priority INTEGER DEFAULT 0
                 );",
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO noteFolder (id, name, local_path, priority) VALUES (1, 'First', ?1, 0)",
+                "INSERT INTO noteFolder (id, name, local_path, show_subfolders, priority) VALUES (1, 'First', ?1, 0, 0)",
                 [first.to_str().unwrap()],
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO noteFolder (id, name, local_path, priority) VALUES (2, 'Active', ?1, 1)",
+                "INSERT INTO noteFolder (id, name, local_path, show_subfolders, priority) VALUES (2, 'Active', ?1, 1, 1)",
                 [active.to_str().unwrap()],
             )
             .unwrap();
@@ -349,16 +389,49 @@ mod tests {
             folders[0],
             NoteFolder {
                 name: "First".into(),
-                path: first
+                path: first,
+                show_subfolders: false,
             }
         );
         assert_eq!(
             folders[1],
             NoteFolder {
                 name: "Active".into(),
-                path: active
+                path: active,
+                show_subfolders: true,
             }
         );
+    }
+
+    #[test]
+    fn treats_missing_subfolder_column_as_disabled() {
+        let root = tempdir().unwrap();
+        let notes = root.path().join("notes");
+        fs::create_dir(&notes).unwrap();
+        let database = root.path().join("QOwnNotes.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE noteFolder (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    local_path TEXT,
+                    priority INTEGER DEFAULT 0
+                );",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO noteFolder (id, name, local_path, priority) VALUES (1, 'Notes', ?1, 0)",
+                [notes.to_str().unwrap()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let (folders, _) =
+            discover_from_qownnotes(&root.path().join("QOwnNotes.conf"), &database).unwrap();
+
+        assert!(!folders[0].show_subfolders);
     }
 
     #[test]
@@ -407,6 +480,20 @@ mod tests {
     }
 
     #[test]
+    fn reads_qownnotes_ignored_subfolder_patterns() {
+        assert_eq!(
+            ignored_subfolder_patterns_from_qsettings(""),
+            [r"^\.".to_string()]
+        );
+        assert_eq!(
+            ignored_subfolder_patterns_from_qsettings(
+                "[General]\nignoreNoteSubFolders=^\\\\.; ^archive$;;cache"
+            ),
+            [r"^\.", "^archive$", "cache"]
+        );
+    }
+
+    #[test]
     fn reads_the_selected_note_folder_from_the_app_config() {
         let file: FileConfig =
             toml::from_str(
@@ -430,10 +517,12 @@ mod tests {
             NoteFolder {
                 name: "First".into(),
                 path: "/notes/first".into(),
+                show_subfolders: true,
             },
             NoteFolder {
                 name: "Saved".into(),
                 path: "/notes/saved".into(),
+                show_subfolders: true,
             },
         ];
 

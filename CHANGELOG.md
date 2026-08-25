@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Expandable note subfolders in the folder pane, with direct-folder filtering
+  mouse and keyboard expansion, and new-note creation in the active subfolder;
+  availability follows the
+  QOwnNotes note folder's `show_subfolders` setting, and directories matching
+  its `ignoreNoteSubFolders` regular expressions are excluded
+  ([#1](https://github.com/qownnotes/qownnotes-tui/issues/1)).
+
 ### Fixed
 
 - `PageUp` and `PageDown` now move the viewer cursor while scrolling and no

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -7,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use chrono::Local;
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -31,6 +33,27 @@ pub enum Pane {
     Folders,
     Notes,
     Viewer,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FolderFilter {
+    AllNotes,
+    Directory(PathBuf),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FolderEntry {
+    NoteFolder(usize),
+    AllNotes,
+    Directory(PathBuf),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FolderRow {
+    pub entry: FolderEntry,
+    pub depth: usize,
+    pub has_children: bool,
+    pub expanded: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,9 +81,12 @@ struct NoteHistoryEntry {
 
 pub struct App {
     pub note_folders: Vec<NoteFolder>,
-    pub selected_folder: usize,
+    pub selected_folder_row: usize,
     pub active_folder: usize,
+    pub subfolders: Vec<PathBuf>,
+    pub folder_filter: FolderFilter,
     pub note_sort: NoteSort,
+    pub ignored_subfolder_patterns: Vec<String>,
     pub theme: Theme,
     pub all_notes: Vec<Note>,
     pub notes: Vec<Note>,
@@ -111,14 +137,21 @@ pub struct App {
     mouse_selection: Option<MouseSelectionTarget>,
     mouse_selection_origin: Option<(u16, u16)>,
     mouse_pending_link: Option<NoteLinkTarget>,
+    expanded_subfolders: HashSet<PathBuf>,
+    scan_generation: u64,
 }
 
 impl App {
     fn new(config: Config) -> Self {
+        let mut expanded_subfolders = HashSet::new();
+        expanded_subfolders.insert(PathBuf::new());
         Self {
-            selected_folder: config.active_folder,
+            selected_folder_row: config.active_folder,
             active_folder: config.active_folder,
+            subfolders: Vec::new(),
+            folder_filter: FolderFilter::AllNotes,
             note_sort: config.note_sort,
+            ignored_subfolder_patterns: config.ignored_subfolder_patterns,
             theme: config.theme,
             note_folders: config.note_folders,
             all_notes: Vec::new(),
@@ -170,6 +203,8 @@ impl App {
             mouse_selection: None,
             mouse_selection_origin: None,
             mouse_pending_link: None,
+            expanded_subfolders,
+            scan_generation: 0,
         }
     }
 
@@ -177,25 +212,139 @@ impl App {
         &self.note_folders[self.active_folder].path
     }
 
-    fn scan_finished(&mut self, folder: usize, result: Result<Vec<Note>, String>) {
+    pub fn uses_subfolders(&self) -> bool {
+        self.note_folders[self.active_folder].show_subfolders
+    }
+
+    pub fn folder_rows(&self) -> Vec<FolderRow> {
+        let mut rows = Vec::new();
+        for index in 0..self.note_folders.len() {
+            let active = index == self.active_folder;
+            rows.push(FolderRow {
+                entry: FolderEntry::NoteFolder(index),
+                depth: 0,
+                has_children: false,
+                expanded: false,
+            });
+            if !active || !self.uses_subfolders() {
+                continue;
+            }
+            rows.push(FolderRow {
+                entry: FolderEntry::AllNotes,
+                depth: 1,
+                has_children: false,
+                expanded: false,
+            });
+            let root = PathBuf::new();
+            rows.push(FolderRow {
+                entry: FolderEntry::Directory(root.clone()),
+                depth: 1,
+                has_children: self.directory_has_children(&root),
+                expanded: self.expanded_subfolders.contains(&root),
+            });
+            rows.extend(
+                self.subfolders
+                    .iter()
+                    .filter(|path| self.subfolder_is_visible(path))
+                    .map(|path| FolderRow {
+                        entry: FolderEntry::Directory(path.clone()),
+                        depth: path.components().count() + 1,
+                        has_children: self.directory_has_children(path),
+                        expanded: self.expanded_subfolders.contains(path),
+                    }),
+            );
+        }
+        rows
+    }
+
+    pub fn note_label(&self, note: &Note) -> String {
+        if self.folder_filter == FolderFilter::AllNotes {
+            note.relative_path.with_extension("").display().to_string()
+        } else {
+            note.name()
+        }
+    }
+
+    fn directory_has_children(&self, directory: &Path) -> bool {
+        self.subfolders
+            .iter()
+            .any(|path| path.parent() == Some(directory))
+    }
+
+    fn subfolder_is_visible(&self, path: &Path) -> bool {
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            if !self.expanded_subfolders.contains(directory) {
+                return false;
+            }
+            if directory.as_os_str().is_empty() {
+                break;
+            }
+            parent = directory.parent();
+        }
+        true
+    }
+
+    fn scan_finished(&mut self, folder: usize, result: Result<scan::NoteInventory, String>) {
         if folder != self.active_folder {
             return;
         }
         self.loading = false;
         match result {
-            Ok(mut notes) => {
-                sort_notes(&mut notes, self.note_sort);
-                self.all_notes = notes;
+            Ok(mut inventory) => {
+                let selected_entry = self
+                    .folder_rows()
+                    .get(self.selected_folder_row)
+                    .map(|row| row.entry.clone());
+                sort_notes(&mut inventory.notes, self.note_sort);
+                if !self.uses_subfolders() {
+                    inventory
+                        .notes
+                        .retain(|note| note.relative_path.parent() == Some(Path::new("")));
+                    inventory.subfolders.clear();
+                    self.folder_filter = FolderFilter::AllNotes;
+                }
+                self.all_notes = inventory.notes;
+                self.subfolders = inventory.subfolders;
+                if let FolderFilter::Directory(path) = &self.folder_filter {
+                    if !path.as_os_str().is_empty() && !self.subfolders.contains(path) {
+                        self.folder_filter = FolderFilter::AllNotes;
+                    }
+                }
                 self.apply_search();
+                let fallback = match &self.folder_filter {
+                    FolderFilter::AllNotes => FolderEntry::AllNotes,
+                    FolderFilter::Directory(path) => FolderEntry::Directory(path.clone()),
+                };
+                self.selected_folder_row = selected_entry
+                    .and_then(|entry| self.folder_rows().iter().position(|row| row.entry == entry))
+                    .or_else(|| {
+                        self.folder_rows()
+                            .iter()
+                            .position(|row| row.entry == fallback)
+                    })
+                    .unwrap_or(folder);
                 if self.search_query.is_empty() {
                     self.status = format!(
-                        "{}: {} notes",
+                        "{} / {}: {} notes",
                         self.note_folders[folder].name,
+                        self.folder_filter_label(),
                         self.notes.len()
                     );
                 }
             }
             Err(error) => self.status = error,
+        }
+    }
+
+    fn scan_event_finished(
+        &mut self,
+        folder: usize,
+        generation: u64,
+        result: Result<scan::NoteInventory, String>,
+    ) {
+        if generation == self.scan_generation {
+            self.scan_finished(folder, result);
         }
     }
 
@@ -268,6 +417,19 @@ impl App {
             match key.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                     self.move_viewer_cursor(key.code);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if self.pane == Pane::Folders {
+            match key.code {
+                KeyCode::Left => {
+                    self.close_or_select_parent_folder();
+                    return;
+                }
+                KeyCode::Right => {
+                    self.expand_selected_folder();
                     return;
                 }
                 _ => {}
@@ -359,15 +521,13 @@ impl App {
             .clone()
             .or_else(|| self.remembered_note.take());
         let terms = search_terms(&self.search_query);
-        self.notes = if terms.is_empty() {
-            self.all_notes.clone()
-        } else {
-            self.all_notes
-                .iter()
-                .filter(|note| note.matches_search(&terms))
-                .cloned()
-                .collect()
-        };
+        self.notes = self
+            .all_notes
+            .iter()
+            .filter(|note| self.note_matches_folder(note))
+            .filter(|note| terms.is_empty() || note.matches_search(&terms))
+            .cloned()
+            .collect();
         self.selected_note = selected_path
             .and_then(|path| {
                 self.notes
@@ -390,15 +550,36 @@ impl App {
     }
 
     fn update_search_status(&mut self) {
+        let folder = self.folder_filter_label();
         if self.search_query.is_empty() {
-            self.status = format!("{} notes", self.notes.len());
+            self.status = format!("{folder}: {} notes", self.notes.len());
         } else {
+            let folder_notes = self
+                .all_notes
+                .iter()
+                .filter(|note| self.note_matches_folder(note))
+                .count();
             self.status = format!(
-                "Search: {} ({} of {} notes)",
+                "Search: {} in {folder} ({} of {} notes)",
                 self.search_query,
                 self.notes.len(),
-                self.all_notes.len()
+                folder_notes
             );
+        }
+    }
+
+    fn note_matches_folder(&self, note: &Note) -> bool {
+        match &self.folder_filter {
+            FolderFilter::AllNotes => true,
+            FolderFilter::Directory(directory) => note.relative_path.parent() == Some(directory),
+        }
+    }
+
+    fn folder_filter_label(&self) -> String {
+        match &self.folder_filter {
+            FolderFilter::AllNotes => "All notes".into(),
+            FolderFilter::Directory(path) if path.as_os_str().is_empty() => "/".into(),
+            FolderFilter::Directory(path) => path.display().to_string(),
         }
     }
 
@@ -799,11 +980,24 @@ impl App {
                     mouse.column,
                     mouse.row,
                     self.folder_list_offset,
-                    self.note_folders.len(),
+                    self.folder_rows().len(),
                 ) {
-                    self.selected_folder = index;
+                    let disclosure_clicked = self.folder_rows().get(index).is_some_and(|row| {
+                        let disclosure_column =
+                            self.folder_area.x.saturating_add(5).saturating_add(
+                                (row.depth.saturating_mul(2)).min(u16::MAX as usize) as u16,
+                            );
+                        row.has_children
+                            && (disclosure_column..disclosure_column.saturating_add(2))
+                                .contains(&mouse.column)
+                    });
+                    self.selected_folder_row = index;
                     self.pane = Pane::Folders;
-                    self.open_selection(scans);
+                    if disclosure_clicked {
+                        self.toggle_selected_folder();
+                    } else {
+                        self.open_selection(scans);
+                    }
                 } else if let Some(index) = list_item_at(
                     self.notes_area,
                     mouse.column,
@@ -926,8 +1120,8 @@ impl App {
     fn move_selection(&mut self, delta: isize) {
         match self.pane {
             Pane::Folders => {
-                self.selected_folder =
-                    move_index(self.selected_folder, self.note_folders.len(), delta);
+                self.selected_folder_row =
+                    move_index(self.selected_folder_row, self.folder_rows().len(), delta);
             }
             Pane::Notes => {
                 self.selected_note = move_index(self.selected_note, self.notes.len(), delta);
@@ -956,22 +1150,46 @@ impl App {
 
     fn open_selection(&mut self, scans: &Sender<ScanResult>) {
         if self.pane == Pane::Folders {
-            if self.selected_folder != self.active_folder {
-                self.active_folder = self.selected_folder;
-                self.search_query.clear();
-                self.searching = false;
-                self.all_notes.clear();
-                self.notes.clear();
-                self.content.clear();
-                self.clear_text_selection();
-                self.current_note = None;
-                self.viewer_scroll = 0;
-                self.note_history.clear();
-                self.note_history_index = None;
-                self.start_scan(scans);
-                if let Err(error) = config::selected_note_folder(self.root()) {
-                    self.status = format!("Unable to remember note folder: {error:#}");
+            let Some(entry) = self
+                .folder_rows()
+                .get(self.selected_folder_row)
+                .map(|row| row.entry.clone())
+            else {
+                return;
+            };
+            if let FolderEntry::NoteFolder(folder) = entry {
+                if folder != self.active_folder {
+                    self.active_folder = folder;
+                    self.selected_folder_row = folder;
+                    self.subfolders.clear();
+                    self.folder_filter = FolderFilter::AllNotes;
+                    self.expanded_subfolders.clear();
+                    self.expanded_subfolders.insert(PathBuf::new());
+                    self.search_query.clear();
+                    self.searching = false;
+                    self.all_notes.clear();
+                    self.notes.clear();
+                    self.content.clear();
+                    self.clear_text_selection();
+                    self.current_note = None;
+                    self.viewer_scroll = 0;
+                    self.note_history.clear();
+                    self.note_history_index = None;
+                    self.start_scan(scans);
+                    if let Err(error) = config::selected_note_folder(self.root()) {
+                        self.status = format!("Unable to remember note folder: {error:#}");
+                    }
+                } else {
+                    self.folder_filter = FolderFilter::AllNotes;
+                    self.apply_search();
                 }
+            } else {
+                self.folder_filter = match entry {
+                    FolderEntry::AllNotes => FolderFilter::AllNotes,
+                    FolderEntry::Directory(path) => FolderFilter::Directory(path),
+                    FolderEntry::NoteFolder(_) => unreachable!(),
+                };
+                self.apply_search();
             }
             self.pane = Pane::Notes;
             return;
@@ -981,6 +1199,62 @@ impl App {
         }
         if self.load_selected_note() {
             self.pane = Pane::Viewer;
+        }
+    }
+
+    fn expand_selected_folder(&mut self) {
+        let Some(row) = self.folder_rows().get(self.selected_folder_row).cloned() else {
+            return;
+        };
+        if row.has_children {
+            if let FolderEntry::Directory(path) = row.entry {
+                self.expanded_subfolders.insert(path);
+            }
+        }
+    }
+
+    fn toggle_selected_folder(&mut self) {
+        let Some(row) = self.folder_rows().get(self.selected_folder_row).cloned() else {
+            return;
+        };
+        if let FolderEntry::Directory(path) = row.entry {
+            if !row.has_children {
+                return;
+            }
+            if row.expanded {
+                self.expanded_subfolders.remove(&path);
+            } else {
+                self.expanded_subfolders.insert(path);
+            }
+        }
+    }
+
+    fn close_or_select_parent_folder(&mut self) {
+        let Some(row) = self.folder_rows().get(self.selected_folder_row).cloned() else {
+            return;
+        };
+        if let FolderEntry::Directory(path) = &row.entry {
+            if row.has_children && row.expanded {
+                self.expanded_subfolders.remove(path);
+                return;
+            }
+        }
+        let parent = match row.entry {
+            FolderEntry::AllNotes => FolderEntry::NoteFolder(self.active_folder),
+            FolderEntry::Directory(path) if path.as_os_str().is_empty() => {
+                FolderEntry::NoteFolder(self.active_folder)
+            }
+            FolderEntry::Directory(path) => {
+                FolderEntry::Directory(path.parent().unwrap_or_else(|| Path::new("")).to_path_buf())
+            }
+            FolderEntry::NoteFolder(_) => return,
+        };
+        if let Some(index) = self
+            .folder_rows()
+            .iter()
+            .position(|row| row.entry == parent)
+        {
+            self.selected_folder_row = index;
         }
     }
 
@@ -1095,19 +1369,18 @@ impl App {
             return;
         }
         let entry = self.note_history[target_index].clone();
-        let Some(selected_note) = self
+        if !self
             .all_notes
             .iter()
-            .position(|note| note.relative_path == entry.path)
-        else {
+            .any(|note| note.relative_path == entry.path)
+        {
             self.status = format!("History note was not found: {}", entry.path.display());
             return;
-        };
+        }
 
         self.search_query.clear();
         self.searching = false;
-        self.notes = self.all_notes.clone();
-        self.selected_note = selected_note;
+        self.reveal_note_folder(&entry.path);
         self.note_list_offset = 0;
         match read_note(self.root(), &entry.path) {
             Ok(content) => {
@@ -1221,16 +1494,15 @@ impl App {
 
         self.search_query.clear();
         self.searching = false;
-        self.notes = self.all_notes.clone();
-        let Some(index) = self
-            .notes
+        if !self
+            .all_notes
             .iter()
-            .position(|note| note.relative_path == relative)
-        else {
+            .any(|note| note.relative_path == relative)
+        {
             self.status = format!("Linked note was not found: {}", relative.display());
             return;
-        };
-        self.selected_note = index;
+        }
+        self.reveal_note_folder(&relative);
         self.note_list_offset = 0;
         if self.load_selected_note() {
             self.pane = Pane::Viewer;
@@ -1334,13 +1606,37 @@ impl App {
     fn start_scan(&mut self, scans: &Sender<ScanResult>) {
         self.loading = true;
         self.status = format!("Scanning {}...", self.note_folders[self.active_folder].name);
-        spawn_scan(self.active_folder, self.root().to_path_buf(), scans.clone());
+        self.scan_generation = self.scan_generation.wrapping_add(1);
+        spawn_scan(
+            self.active_folder,
+            self.scan_generation,
+            self.root().to_path_buf(),
+            self.uses_subfolders(),
+            self.ignored_subfolder_patterns.clone(),
+            scans.clone(),
+        );
+    }
+
+    fn invalidate_scans(&mut self) {
+        self.scan_generation = self.scan_generation.wrapping_add(1);
+        self.loading = false;
     }
 
     fn create_note(&mut self) {
         let title = naming::new_note_title(Local::now().naive_local());
-        let relative = PathBuf::from(format!("{title}.md"));
-        let path = self.root().join(&relative);
+        let directory = match &self.folder_filter {
+            FolderFilter::AllNotes => Path::new(""),
+            FolderFilter::Directory(path) => path,
+        };
+        let relative = directory.join(format!("{title}.md"));
+        let parent = match writable_note_directory(self.root(), directory) {
+            Ok(parent) => parent,
+            Err(error) => {
+                self.status = format!("Unable to create {}: {error:#}", relative.display());
+                return;
+            }
+        };
+        let path = parent.join(relative.file_name().unwrap_or(relative.as_os_str()));
         let content = naming::initial_content(&title);
         match fs::OpenOptions::new()
             .write(true)
@@ -1364,11 +1660,22 @@ impl App {
 
         self.search_query.clear();
         self.searching = false;
-        match scan::scan(self.root()) {
-            Ok(mut notes) => {
-                sort_notes(&mut notes, self.note_sort);
-                self.all_notes = notes;
-                self.notes = self.all_notes.clone();
+        match scan::scan_with_subfolders(
+            self.root(),
+            self.uses_subfolders(),
+            &self.ignored_subfolder_patterns,
+        ) {
+            Ok(mut inventory) => {
+                self.invalidate_scans();
+                sort_notes(&mut inventory.notes, self.note_sort);
+                self.all_notes = inventory.notes;
+                self.subfolders = inventory.subfolders;
+                self.notes = self
+                    .all_notes
+                    .iter()
+                    .filter(|note| self.note_matches_folder(note))
+                    .cloned()
+                    .collect();
                 self.selected_note = self
                     .notes
                     .iter()
@@ -1385,6 +1692,40 @@ impl App {
                 }
             }
             Err(error) => self.status = format!("Unable to refresh notes: {error:#}"),
+        }
+    }
+
+    fn reveal_note_folder(&mut self, relative: &Path) {
+        let directory = relative
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
+        let mut ancestor = Some(directory.as_path());
+        while let Some(path) = ancestor {
+            self.expanded_subfolders.insert(path.to_path_buf());
+            if path.as_os_str().is_empty() {
+                break;
+            }
+            ancestor = path.parent();
+        }
+        self.folder_filter = FolderFilter::Directory(directory.clone());
+        self.notes = self
+            .all_notes
+            .iter()
+            .filter(|note| self.note_matches_folder(note))
+            .cloned()
+            .collect();
+        self.selected_note = self
+            .notes
+            .iter()
+            .position(|note| note.relative_path == relative)
+            .unwrap_or(0);
+        if let Some(index) = self
+            .folder_rows()
+            .iter()
+            .position(|row| row.entry == FolderEntry::Directory(directory.clone()))
+        {
+            self.selected_folder_row = index;
         }
     }
 
@@ -1409,6 +1750,7 @@ impl App {
         };
 
         self.all_notes.retain(|note| note.relative_path != relative);
+        self.invalidate_scans();
         self.notes.retain(|note| note.relative_path != relative);
         let previous_history_path = self.note_history_index.and_then(|index| {
             self.note_history[..index]
@@ -1505,6 +1847,7 @@ impl App {
         let path = self.root().join(&renamed);
         match fs::write(&path, self.content.as_bytes()) {
             Ok(()) => {
+                self.invalidate_scans();
                 self.persisted_content.clone_from(&self.content);
                 self.dirty = false;
                 self.dirty_since = None;
@@ -1550,6 +1893,7 @@ impl App {
         self.notes = self
             .all_notes
             .iter()
+            .filter(|note| self.note_matches_folder(note))
             .filter(|note| note.matches_search(&terms))
             .cloned()
             .collect();
@@ -1624,7 +1968,9 @@ pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
             Event::Mouse(mouse) => app.handle_mouse(mouse, &scan_tx),
             Event::Paste(text) if app.editing => app.insert_editor_text(&normalize_paste(&text)),
             Event::Paste(_) => {}
-            Event::ScanFinished((folder, result)) => app.scan_finished(folder, result),
+            Event::ScanFinished((folder, generation, result)) => {
+                app.scan_event_finished(folder, generation, result)
+            }
             Event::Tick => app.tick(),
             Event::Resize => {}
         }
@@ -1632,10 +1978,19 @@ pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
     config::selected_note(app.root(), app.current_note.as_deref())
 }
 
-fn spawn_scan(folder: usize, root: PathBuf, sender: Sender<ScanResult>) {
+fn spawn_scan(
+    folder: usize,
+    generation: u64,
+    root: PathBuf,
+    include_subfolders: bool,
+    ignored_subfolder_patterns: Vec<String>,
+    sender: Sender<ScanResult>,
+) {
     thread::spawn(move || {
-        let result = scan::scan(&root).map_err(|error| format!("Scan failed: {error:#}"));
-        let _ = sender.send((folder, result));
+        let result =
+            scan::scan_with_subfolders(&root, include_subfolders, &ignored_subfolder_patterns)
+                .map_err(|error| format!("Scan failed: {error:#}"));
+        let _ = sender.send((folder, generation, result));
     });
 }
 
@@ -1645,6 +2000,34 @@ fn read_note(root: &Path, relative: &Path) -> Result<String, NoteReadError> {
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
     String::from_utf8(bytes.to_vec())
         .map_err(|_| NoteReadError::InvalidUtf8(relative.to_path_buf()))
+}
+
+fn writable_note_directory(root: &Path, relative: &Path) -> anyhow::Result<PathBuf> {
+    let mut directory = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            anyhow::bail!("unsafe note subfolder: {}", relative.display());
+        };
+        directory.push(part);
+        let metadata = fs::symlink_metadata(&directory)
+            .with_context(|| format!("cannot access note subfolder {}", relative.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            anyhow::bail!("unsafe note subfolder: {}", relative.display());
+        }
+    }
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot access note root {}", root.display()))?;
+    let canonical_directory = directory
+        .canonicalize()
+        .with_context(|| format!("cannot access note subfolder {}", relative.display()))?;
+    if !canonical_directory.starts_with(&canonical_root) {
+        anyhow::bail!(
+            "note subfolder is outside the note root: {}",
+            relative.display()
+        );
+    }
+    Ok(canonical_directory)
 }
 
 fn previous_boundary(content: &str, cursor: usize) -> usize {
@@ -1792,7 +2175,7 @@ fn search_terms(query: &str) -> Vec<String> {
 mod tests {
     use std::{
         fs,
-        path::Path,
+        path::{Path, PathBuf},
         sync::mpsc,
         time::{Duration, SystemTime},
     };
@@ -1812,7 +2195,9 @@ mod tests {
         style::Modifier,
     };
 
-    use super::{App, Pane, list_item_at, move_index, search_terms, sort_notes};
+    use super::{
+        App, FolderEntry, FolderFilter, Pane, list_item_at, move_index, search_terms, sort_notes,
+    };
     use crate::markdown::NoteLinkTarget;
 
     #[test]
@@ -1841,11 +2226,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
 
@@ -1877,11 +2264,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.search_query = "matching".into();
@@ -1897,16 +2286,233 @@ mod tests {
     }
 
     #[test]
-    fn viewer_scrolling_stays_in_bounds() {
+    fn folder_filter_shows_only_direct_notes_and_searches_within_them() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("work/archive")).unwrap();
+        fs::write(root.path().join("root.md"), "matching").unwrap();
+        fs::write(root.path().join("work/current.md"), "matching").unwrap();
+        fs::write(root.path().join("work/other.md"), "other").unwrap();
+        fs::write(root.path().join("work/archive/old.md"), "matching").unwrap();
         let mut app = App::new(Config {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
-                path: "/notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+
+        app.folder_filter = FolderFilter::Directory("work".into());
+        app.apply_search();
+        assert_eq!(
+            app.notes
+                .iter()
+                .map(|note| note.relative_path.as_path())
+                .collect::<Vec<_>>(),
+            [Path::new("work/current.md"), Path::new("work/other.md")]
+        );
+
+        app.search_query = "matching".into();
+        app.apply_search();
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(app.notes[0].relative_path, Path::new("work/current.md"));
+
+        app.folder_filter = FolderFilter::AllNotes;
+        app.apply_search();
+        assert_eq!(app.notes.len(), 3);
+
+        app.search_query.clear();
+        app.folder_filter = FolderFilter::Directory("".into());
+        app.apply_search();
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(app.notes[0].relative_path, Path::new("root.md"));
+    }
+
+    #[test]
+    fn folder_tree_expands_nested_directories() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("work/archive")).unwrap();
+        fs::create_dir(root.path().join("personal")).unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+
+        assert!(
+            !app.folder_rows()
+                .iter()
+                .any(|row| row.entry == FolderEntry::Directory("work/archive".into()))
+        );
+        app.selected_folder_row = app
+            .folder_rows()
+            .iter()
+            .position(|row| row.entry == FolderEntry::Directory("work".into()))
+            .unwrap();
+        app.expand_selected_folder();
+
+        assert!(
+            app.folder_rows()
+                .iter()
+                .any(|row| row.entry == FolderEntry::Directory("work/archive".into()))
+        );
+    }
+
+    #[test]
+    fn clicking_folder_disclosure_toggles_expansion_without_filtering() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("work/archive")).unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            ignored_subfolder_patterns: Vec::new(),
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.folder_area = Rect::new(0, 0, 30, 10);
+        let work_index = app
+            .folder_rows()
+            .iter()
+            .position(|row| row.entry == FolderEntry::Directory("work".into()))
+            .unwrap();
+        let work_row = app.folder_area.y + 1 + work_index as u16;
+        let disclosure_column = app.folder_area.x + 5 + 4;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: disclosure_column,
+            row: work_row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        app.handle_mouse(click, &scan_tx);
+
+        assert_eq!(app.pane, Pane::Folders);
+        assert_eq!(app.folder_filter, FolderFilter::AllNotes);
+        assert!(
+            app.folder_rows()
+                .iter()
+                .any(|row| { row.entry == FolderEntry::Directory("work/archive".into()) })
+        );
+
+        app.handle_mouse(click, &scan_tx);
+        assert!(
+            !app.folder_rows()
+                .iter()
+                .any(|row| { row.entry == FolderEntry::Directory("work/archive".into()) })
+        );
+    }
+
+    #[test]
+    fn disabled_subfolder_support_ignores_nested_notes_and_tree_rows() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        fs::write(root.path().join("root.md"), "root").unwrap();
+        fs::write(root.path().join("work/nested.md"), "nested").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: false,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(app.notes[0].relative_path, Path::new("root.md"));
+        assert!(app.subfolders.is_empty());
+        assert_eq!(
+            app.folder_rows()
+                .iter()
+                .map(|row| row.entry.clone())
+                .collect::<Vec<_>>(),
+            [FolderEntry::NoteFolder(0)]
+        );
+
+        app.create_note();
+        assert_eq!(app.all_notes.len(), 2);
+        assert!(
+            app.all_notes
+                .iter()
+                .all(|note| note.relative_path.parent() == Some(Path::new("")))
+        );
+    }
+
+    #[test]
+    fn ignores_stale_scan_generations() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_generation = 2;
+
+        app.scan_event_finished(
+            0,
+            1,
+            Ok(scan::NoteInventory {
+                notes: Vec::new(),
+                subfolders: vec!["stale".into()],
+            }),
+        );
+        assert!(app.subfolders.is_empty());
+
+        app.scan_event_finished(
+            0,
+            2,
+            Ok(scan::NoteInventory {
+                notes: Vec::new(),
+                subfolders: vec!["current".into()],
+            }),
+        );
+        assert_eq!(app.subfolders, [PathBuf::from("current")]);
+    }
+
+    #[test]
+    fn viewer_scrolling_stays_in_bounds() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.viewer_max_scroll = 10;
 
@@ -1924,11 +2530,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.pane = Pane::Viewer;
         app.content = "zero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight".into();
@@ -1962,11 +2570,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.selected_note = app
@@ -2004,11 +2614,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.selected_note = app
@@ -2070,11 +2682,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.pane = Pane::Viewer;
@@ -2144,11 +2758,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = (0..12)
             .map(|line| format!("line {line:02} {}", "wrapped words ".repeat(6)))
@@ -2192,11 +2808,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = format!(
             "# Heading\n\n{}\n\nlast paragraph\n",
@@ -2250,11 +2868,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "first\nsecond".into();
         app.current_note = Some("note.md".into());
@@ -2288,11 +2908,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = (0..20)
             .map(|line| format!("line {line}"))
@@ -2351,11 +2973,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = (0..30)
             .map(|line| format!("line {line:02} {}", "selectable text ".repeat(8)))
@@ -2429,11 +3053,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.pane = Pane::Viewer;
@@ -2485,11 +3111,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.notes = vec![
             Note {
@@ -2522,6 +3150,7 @@ mod tests {
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         let (scan_tx, _scan_rx) = mpsc::channel();
 
@@ -2546,6 +3175,7 @@ mod tests {
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.pane = Pane::Viewer;
         app.editing = true;
@@ -2568,11 +3198,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         let (scan_tx, _scan_rx) = mpsc::channel();
@@ -2615,11 +3247,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         let (scan_tx, _scan_rx) = mpsc::channel();
@@ -2643,11 +3277,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         let notes = vec![Note {
             relative_path: "note.md".into(),
@@ -2656,7 +3292,13 @@ mod tests {
             search_text_lowercase: "previewed".into(),
         }];
 
-        app.scan_finished(0, Ok(notes));
+        app.scan_finished(
+            0,
+            Ok(scan::NoteInventory {
+                notes,
+                subfolders: Vec::new(),
+            }),
+        );
 
         assert_eq!(app.content, "previewed");
         assert_eq!(app.current_note.as_deref(), Some(Path::new("note.md")));
@@ -2672,11 +3314,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.remembered_note = Some("second.md".into());
 
@@ -2696,11 +3340,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -2724,11 +3370,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -2757,11 +3405,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.pane = Pane::Viewer;
@@ -2794,11 +3444,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         let (scan_tx, _scan_rx) = mpsc::channel();
@@ -2829,11 +3481,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -2863,11 +3517,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "one\ntwo\nthree".into();
         app.editor_cursor = 1;
@@ -2885,11 +3541,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "alpha\nbeta".into();
         app.persisted_content.clone_from(&app.content);
@@ -2912,11 +3570,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "first\nsecond".into();
         app.persisted_content.clone_from(&app.content);
@@ -2941,11 +3601,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "first\nsecond".into();
         app.pane = Pane::Viewer;
@@ -2973,11 +3635,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
 
         app.create_note();
@@ -2997,6 +3661,115 @@ mod tests {
     }
 
     #[test]
+    fn creates_a_note_in_the_active_subfolder() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.folder_filter = FolderFilter::Directory("work".into());
+        app.apply_search();
+        app.loading = true;
+        app.scan_generation = 4;
+
+        app.create_note();
+
+        let relative = app.current_note.as_ref().unwrap();
+        assert_eq!(relative.parent(), Some(Path::new("work")));
+        assert!(root.path().join(relative).is_file());
+        assert_eq!(app.notes.len(), 1);
+        assert!(!app.loading);
+        assert_eq!(app.scan_generation, 5);
+
+        app.content = "# Renamed\n".into();
+        app.mark_dirty();
+        app.save_note();
+        assert_eq!(
+            app.current_note.as_deref(),
+            Some(Path::new("work/Renamed.md"))
+        );
+        assert_eq!(app.notes.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_to_create_in_a_subfolder_replaced_by_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.folder_filter = FolderFilter::Directory("work".into());
+        fs::remove_dir(root.path().join("work")).unwrap();
+        symlink(outside.path(), root.path().join("work")).unwrap();
+
+        app.create_note();
+
+        assert!(app.current_note.is_none());
+        assert!(app.status.contains("unsafe note subfolder"));
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn opening_a_link_reveals_the_target_subfolder() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        fs::write(root.path().join("Source.md"), "source").unwrap();
+        fs::write(root.path().join("work/Target.md"), "target").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.selected_note = app
+            .notes
+            .iter()
+            .position(|note| note.relative_path == Path::new("Source.md"))
+            .unwrap();
+        app.load_selected_note();
+
+        app.open_note_link(&NoteLinkTarget::Wiki("/work/Target".into()));
+
+        assert_eq!(app.folder_filter, FolderFilter::Directory("work".into()));
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(
+            app.current_note.as_deref(),
+            Some(Path::new("work/Target.md"))
+        );
+    }
+
+    #[test]
     fn automatic_rename_adds_a_collision_suffix() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("old.md"), "# Old\n").unwrap();
@@ -3005,11 +3778,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.selected_note = app
@@ -3036,11 +3811,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "zero\none\ntwo\nthree\nfour\nfive".into();
         app.editor_cursor = "zero\non".len();
@@ -3062,11 +3839,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "first\nsecond\nthird".into();
         app.editor_cursor = "first\nsec".len();
@@ -3086,11 +3865,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -3115,11 +3896,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.notes.push(Note {
             relative_path: "note.md".into(),
@@ -3187,11 +3970,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.selected_note = app
@@ -3239,11 +4024,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::Alphabetical { descending: false },
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.selected_note = app
@@ -3293,11 +4080,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: root.path().into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
         app.pane = Pane::Viewer;
@@ -3347,11 +4136,13 @@ mod tests {
             note_folders: vec![NoteFolder {
                 name: "Notes".into(),
                 path: "/notes".into(),
+                show_subfolders: true,
             }],
             active_folder: 0,
             note_sort: NoteSort::LastModified,
             save_interval_seconds: 10,
             theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
         });
         app.content = "- [ ] task".into();
         app.persisted_content.clone_from(&app.content);

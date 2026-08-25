@@ -2,9 +2,9 @@ use std::{sync::mpsc::Receiver, time::Duration};
 
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 
-use crate::notes::model::Note;
+use crate::notes::scan::NoteInventory;
 
-pub type ScanResult = (usize, Result<Vec<Note>, String>);
+pub type ScanResult = (usize, u64, Result<NoteInventory, String>);
 
 pub enum Event {
     Key(KeyEvent),

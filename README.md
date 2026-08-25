@@ -54,7 +54,8 @@ command writes the completion script to standard output.
 | `PageUp`, `PageDown`    | Scroll the viewer by one page                      |
 | `Home`, `End`           | Jump to the start or end of the note               |
 | `h`, `l`, `Tab`         | Switch panes                                       |
-| `Enter`                 | Activate a note folder or open a note              |
+| `Left`, `Right`         | Collapse or expand the selected note subfolder     |
+| `Enter`                 | Activate a note folder/subfolder or open a note    |
 | `Ctrl-Space`            | Open the link or toggle the checkbox at the cursor |
 | `n`, `Ctrl-n`           | Create a timestamped note                          |
 | `d`                     | Delete a note after confirmation                   |
@@ -72,6 +73,17 @@ command writes the completion script to standard output.
 
 Search terms are case-insensitive and all terms must match; use quotes to search
 for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The
+folder pane contains each configured note folder, an `All notes` item, the note
+folder root (`/`), and its expandable note subfolders. Selecting a subfolder
+shows notes directly in that folder; selecting `All notes` shows the complete
+tree. Folder disclosure arrows can also be clicked to expand or collapse them.
+New notes are created in the selected subfolder, or in the note folder
+root when `All notes` is selected. For note folders discovered from QOwnNotes,
+the subfolder tree is enabled only when **Use note subfolders** is enabled for
+that folder in QOwnNotes. Subfolders matching QOwnNotes' semicolon-separated
+`ignoreNoteSubFolders` regular expressions are not scanned or displayed.
+Explicit `--notes-dir` folders enable subfolder support and use the configured
+QOwnNotes ignore patterns, or QOwnNotes' `^\.` default when unavailable. The
 viewer soft-wraps and syntax-highlights Markdown. Notes automatically save
 at the interval configured in Settings > General (10 seconds by default). New
 notes start with a `# Note YYYY-MM-DD HHhMMsSS` heading. On save, note filenames

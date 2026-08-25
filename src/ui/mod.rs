@@ -5,13 +5,13 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+        Block, Borders, Clear, HighlightSpacing, List, ListItem, ListState, Paragraph, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Widget, Wrap,
     },
 };
 
 use crate::{
-    app::{App, Pane, TextCell},
+    app::{App, FolderEntry, FolderFilter, Pane, TextCell},
     markdown,
 };
 
@@ -66,29 +66,55 @@ fn draw_narrow(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_folders(frame: &mut Frame, app: &mut App, area: Rect) {
     app.folder_area = area;
-    let items = app
-        .note_folders
+    let rows = app.folder_rows();
+    let items = rows
         .iter()
-        .enumerate()
-        .map(|(index, folder)| {
-            let marker = if index == app.active_folder {
-                "● "
+        .map(|row| {
+            let indent = "  ".repeat(row.depth);
+            let disclosure = if row.has_children {
+                if row.expanded { "▾ " } else { "▸ " }
             } else {
                 "  "
             };
+            let (active, label) = match &row.entry {
+                FolderEntry::NoteFolder(index) => (
+                    *index == app.active_folder,
+                    app.note_folders[*index].name.clone(),
+                ),
+                FolderEntry::AllNotes => (
+                    app.folder_filter == FolderFilter::AllNotes,
+                    "All notes".into(),
+                ),
+                FolderEntry::Directory(path) => (
+                    app.folder_filter == FolderFilter::Directory(path.clone()),
+                    if path.as_os_str().is_empty() {
+                        "/".into()
+                    } else {
+                        path.file_name()
+                            .unwrap_or(path.as_os_str())
+                            .to_string_lossy()
+                            .into_owned()
+                    },
+                ),
+            };
+            let marker = if active { "● " } else { "  " };
             ListItem::new(Line::from(vec![
+                Span::raw(indent),
                 Span::styled(marker, Style::default().fg(app.theme.success.into())),
-                Span::raw(folder.name.clone()),
+                Span::raw(disclosure),
+                Span::raw(label),
             ]))
         })
         .collect::<Vec<_>>();
+    app.selected_folder_row = app.selected_folder_row.min(rows.len().saturating_sub(1));
     let mut state = ListState::default()
         .with_offset(app.folder_list_offset)
-        .with_selected(Some(app.selected_folder));
+        .with_selected((!rows.is_empty()).then_some(app.selected_folder_row));
     frame.render_stateful_widget(
         List::new(items)
-            .block(pane_block("Note folders", app.pane == Pane::Folders, app))
+            .block(pane_block("Folders", app.pane == Pane::Folders, app))
             .highlight_style(highlight_style(app))
+            .highlight_spacing(HighlightSpacing::Always)
             .highlight_symbol("› "),
         area,
         &mut state,
@@ -101,7 +127,7 @@ fn draw_notes(frame: &mut Frame, app: &mut App, area: Rect) {
     let items = app
         .notes
         .iter()
-        .map(|note| ListItem::new(note.name()))
+        .map(|note| ListItem::new(app.note_label(note)))
         .collect::<Vec<_>>();
     let mut state = ListState::default()
         .with_offset(app.note_list_offset)
@@ -415,7 +441,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
         " n new  d delete  / search  e edit  j/k scroll  s settings  ? help  q quit "
     } else {
-        " s settings  ? help  R reload  q quit "
+        " Enter filter  Left/Right tree  s settings  R reload  ? help  q quit "
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -437,7 +463,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
-            "Arrow keys  move the viewer/editor cursor\n\
+            "Arrow keys  move cursor or navigate the folder tree\n\
              Shift-Arrows select text in viewer or editor\n\
              j / k       move list selection or scroll viewer\n\
              PgUp/PgDn   scroll viewer by one page\n\
@@ -445,7 +471,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              h / l       move between panes\n\
              Tab/Shift-Tab  next or previous pane\n\
              Alt-Left/Right  back or forward in note history\n\
-             Enter       activate note folder or focus viewer\n\
+             Enter       activate a folder filter, note, or viewer\n\
              Ctrl-Space  open link or toggle checkbox at the cursor\n\
              Mouse       select text, activate items/links, or scroll panes\n\
              /           search note names and text\n\

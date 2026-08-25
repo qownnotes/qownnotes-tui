@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-25
+
 ### Added
 
-- Expandable note subfolders in the folder pane, with direct-folder filtering
+- Expandable note subfolders in the folder pane, with direct-folder filtering,
   mouse and keyboard expansion, and new-note creation in the active subfolder;
   availability follows the
   QOwnNotes note folder's `show_subfolders` setting, and directories matching
@@ -137,7 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reserved `.git`, `media`, `attachments`, and `trash` directories are excluded
   from note discovery.
 
-[Unreleased]: https://github.com/qownnotes/qownnotes-tui/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/qownnotes/qownnotes-tui/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/qownnotes/qownnotes-tui/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/qownnotes/qownnotes-tui/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/qownnotes/qownnotes-tui/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/qownnotes/qownnotes-tui/compare/v0.3.0...v0.4.0

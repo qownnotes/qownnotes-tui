@@ -4,7 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    devenv.url = "github:cachix/devenv";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -12,11 +11,10 @@
   };
 
   outputs =
-    inputs@{
+    {
       self,
       nixpkgs,
       flake-utils,
-      devenv,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -59,20 +57,6 @@
         };
 
         apps.default = flake-utils.lib.mkApp { drv = package; };
-
-        devShells.default = devenv.lib.mkShell {
-          inherit inputs pkgs;
-          modules = [
-            (_: {
-              devenv.root =
-                let
-                  root = builtins.getEnv "PWD";
-                in
-                if root != "" then root else self.outPath;
-            })
-            ./devenv.nix
-          ];
-        };
 
         formatter = pkgs.nixfmt;
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Numeric and named Markdown footnotes, with link styling and navigation between
+  references and definitions in the viewer and editor.
+
 ## [0.7.0] - 2026-08-25
 
 ### Added

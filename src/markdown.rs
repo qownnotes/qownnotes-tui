@@ -14,6 +14,7 @@ pub enum NoteLinkTarget {
     Legacy(String),
     Wiki(String),
     Uri(String),
+    SourceOffset(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -283,6 +284,16 @@ fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
             }
         }
         if text.starts_with('[') {
+            if let Some(length) = footnote_label_length(text) {
+                spans.push(Span::styled(
+                    text[..length].to_owned(),
+                    Style::default()
+                        .fg(theme.link.into())
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
+                text = &text[length..];
+                continue;
+            }
             if let Some(end) = text.strip_prefix("[[").and_then(|rest| rest.find("]]")) {
                 let length = end + 4;
                 spans.push(Span::styled(
@@ -359,6 +370,7 @@ fn markdown_autolink_length(text: &str) -> Option<usize> {
 }
 
 pub fn note_links(source: &str) -> Vec<NoteLink> {
+    let definitions = footnote_definitions(source);
     let mut links = Vec::new();
     let mut offset = 0;
     let mut in_fence = false;
@@ -371,6 +383,8 @@ pub fn note_links(source: &str) -> Vec<NoteLink> {
         }
         offset += line.len() + 1;
     }
+    links.extend(footnote_links(source, &definitions));
+    links.sort_by_key(|link| link.range.start);
     links
 }
 
@@ -449,6 +463,97 @@ fn parse_line_links(line: &str, line_offset: usize, links: &mut Vec<NoteLink>) {
         }
         index += rest.chars().next().map_or(1, char::len_utf8);
     }
+}
+
+fn footnote_label_length(text: &str) -> Option<usize> {
+    let label = text.strip_prefix("[^")?;
+    let end = label.find(']')?;
+    (end > 0 && !label[..end].contains(['\r', '\n'])).then_some(end + 3)
+}
+
+fn footnote_definitions(source: &str) -> Vec<(String, Range<usize>)> {
+    let mut definitions = Vec::new();
+    let mut offset = 0;
+    let mut in_fence = false;
+    for line in source.split('\n') {
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+        } else if !in_fence {
+            let indent = line.len() - trimmed.len();
+            if indent <= 3 {
+                if let Some(length) = footnote_label_length(trimmed) {
+                    if trimmed[length..].starts_with(':') {
+                        definitions.push((
+                            trimmed[2..length - 1].to_owned(),
+                            offset + indent..offset + indent + length,
+                        ));
+                    }
+                }
+            }
+        }
+        offset += line.len() + 1;
+    }
+    definitions
+}
+
+fn footnote_links(source: &str, definitions: &[(String, Range<usize>)]) -> Vec<NoteLink> {
+    let mut references = Vec::new();
+    let mut offset = 0;
+    let mut in_fence = false;
+    for line in source.split('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+        } else if !in_fence {
+            let mut index = 0;
+            while index < line.len() {
+                let rest = &line[index..];
+                if let Some(code) = rest.strip_prefix('`') {
+                    index += code.find('`').map_or(1, |end| end + 2);
+                    continue;
+                }
+                if let Some(length) = footnote_label_length(rest) {
+                    let range = offset + index..offset + index + length;
+                    let label = &rest[2..length - 1];
+                    if !rest[length..].starts_with(':')
+                        && definitions
+                            .iter()
+                            .any(|(definition, _)| definition == label)
+                    {
+                        references.push((label.to_owned(), range));
+                    }
+                    index += length;
+                    continue;
+                }
+                index += rest.chars().next().map_or(1, char::len_utf8);
+            }
+        }
+        offset += line.len() + 1;
+    }
+
+    let mut links = references
+        .iter()
+        .filter_map(|(label, range)| {
+            let (_, definition) = definitions
+                .iter()
+                .find(|(definition, _)| definition == label)?;
+            Some(NoteLink {
+                range: range.clone(),
+                target: NoteLinkTarget::SourceOffset(definition.start),
+            })
+        })
+        .collect::<Vec<_>>();
+    links.extend(definitions.iter().filter_map(|(label, range)| {
+        let (_, reference) = references
+            .iter()
+            .find(|(reference, _)| reference == label)?;
+        Some(NoteLink {
+            range: range.clone(),
+            target: NoteLinkTarget::SourceOffset(reference.start),
+        })
+    }));
+    links
 }
 
 fn is_web_uri(target: &str) -> bool {
@@ -720,6 +825,44 @@ mod tests {
                 &NoteLinkTarget::Uri("https://example.com".into()),
             ]
         );
+    }
+
+    #[test]
+    fn highlights_and_links_numeric_and_named_footnotes() {
+        let source =
+            "Text[^1] and again[^1]. Named[^source].\n\n[^1]: Number\n[^source]: Explanation";
+        let text = highlight(source, &Theme::default());
+        let links = note_links(source);
+
+        let footnote_spans = text
+            .lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .filter(|span| span.content.starts_with("[^") && span.content.ends_with(']'))
+            .collect::<Vec<_>>();
+        assert_eq!(footnote_spans.len(), 5);
+        assert!(footnote_spans.iter().all(|span| {
+            span.style.fg == Some(Color::LightBlue)
+                && span.style.add_modifier.contains(Modifier::UNDERLINED)
+        }));
+        assert_eq!(links.len(), 5);
+        assert_eq!(links[0].target, NoteLinkTarget::SourceOffset(41));
+        assert_eq!(links[1].target, NoteLinkTarget::SourceOffset(41));
+        assert_eq!(links[2].target, NoteLinkTarget::SourceOffset(54));
+        assert_eq!(links[3].target, NoteLinkTarget::SourceOffset(4));
+        assert_eq!(links[4].target, NoteLinkTarget::SourceOffset(29));
+    }
+
+    #[test]
+    fn ignores_undefined_and_code_footnotes() {
+        let source = "Undefined[^missing] Text[^source] `Code[^source]`\n```\nFenced[^source]\n```\n[^source]: Explanation";
+
+        let links = note_links(source);
+
+        assert_eq!(links.len(), 2);
+        assert_eq!(&source[links[0].range.clone()], "[^source]");
+        assert_eq!(links[0].target, NoteLinkTarget::SourceOffset(74));
+        assert_eq!(links[1].target, NoteLinkTarget::SourceOffset(24));
     }
 
     #[test]

@@ -590,6 +590,16 @@ impl App {
         }
         if key.code == KeyCode::Char(' ') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.editor_selection_anchor = None;
+            if let Some(target) = crate::markdown::note_links(&self.content)
+                .into_iter()
+                .find(|link| {
+                    link.range.start <= self.editor_cursor && self.editor_cursor <= link.range.end
+                })
+                .map(|link| link.target)
+            {
+                self.open_note_link(&target);
+                return;
+            }
             self.toggle_checkbox_at(self.editor_cursor);
             return;
         }
@@ -1462,6 +1472,18 @@ impl App {
     }
 
     fn open_note_link(&mut self, target: &NoteLinkTarget) {
+        if let NoteLinkTarget::SourceOffset(offset) = target {
+            if self.editing {
+                self.editor_cursor = (*offset).min(self.content.len());
+                self.editor_selection_anchor = None;
+            } else {
+                self.viewer_cursor = (*offset).min(self.content.len());
+                self.viewer_selection_anchor = None;
+                self.viewer_follow_selection = true;
+            }
+            self.status = "Followed footnote".into();
+            return;
+        }
         if let NoteLinkTarget::Uri(uri) = target {
             let result = Command::new(if cfg!(target_os = "macos") {
                 "open"
@@ -1485,7 +1507,7 @@ impl App {
                     .then(|| percent_decode_str(heading).decode_utf8_lossy().into_owned())
             }),
             NoteLinkTarget::Legacy(_) | NoteLinkTarget::Wiki(_) => None,
-            NoteLinkTarget::Uri(_) => unreachable!(),
+            NoteLinkTarget::Uri(_) | NoteLinkTarget::SourceOffset(_) => unreachable!(),
         };
         let Some(relative) = self.resolve_note_link(target) else {
             self.status = "Linked note was not found".into();
@@ -1599,7 +1621,7 @@ impl App {
                     })
                     .map(|note| note.relative_path.clone())
             }
-            NoteLinkTarget::Uri(_) => None,
+            NoteLinkTarget::Uri(_) | NoteLinkTarget::SourceOffset(_) => None,
         }
     }
 
@@ -4157,5 +4179,33 @@ mod tests {
         app.handle_editor_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
 
         assert_eq!(app.content, "- [ ] task");
+    }
+
+    #[test]
+    fn control_space_navigates_between_footnotes_in_viewer_and_editor() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.content = "Text[^source]\n\n[^source]: Explanation".into();
+        app.viewer_links = crate::markdown::note_links(&app.content);
+
+        app.viewer_cursor = app.content.find("source").unwrap();
+        app.activate_viewer_position();
+        assert_eq!(app.viewer_cursor, app.content.rfind("[^source]").unwrap());
+        assert!(app.viewer_follow_selection);
+
+        app.editing = true;
+        app.editor_cursor = app.content.rfind("source").unwrap();
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        assert_eq!(app.editor_cursor, app.content.find("[^source]").unwrap());
     }
 }

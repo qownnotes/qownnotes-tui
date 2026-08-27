@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevented non-ASCII indentation from causing a panic while detecting Markdown
+  footnote definitions.
+
 ## [0.8.0] - 2026-08-27
 
 ### Added

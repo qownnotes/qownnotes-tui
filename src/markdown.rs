@@ -476,11 +476,15 @@ fn footnote_definitions(source: &str) -> Vec<(String, Range<usize>)> {
     let mut offset = 0;
     let mut in_fence = false;
     for line in source.split('\n') {
-        let trimmed = line.trim_start_matches([' ', '\t']);
+        let indent = line
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .take(4)
+            .count();
+        let trimmed = &line[indent..];
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_fence = !in_fence;
         } else if !in_fence {
-            let indent = line.len() - trimmed.len();
             if indent <= 3 {
                 if let Some(length) = footnote_label_length(trimmed) {
                     if trimmed[length..].starts_with(':') {

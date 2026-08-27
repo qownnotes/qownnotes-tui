@@ -484,15 +484,13 @@ fn footnote_definitions(source: &str) -> Vec<(String, Range<usize>)> {
         let trimmed = &line[indent..];
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_fence = !in_fence;
-        } else if !in_fence {
-            if indent <= 3 {
-                if let Some(length) = footnote_label_length(trimmed) {
-                    if trimmed[length..].starts_with(':') {
-                        definitions.push((
-                            trimmed[2..length - 1].to_owned(),
-                            offset + indent..offset + indent + length,
-                        ));
-                    }
+        } else if !in_fence && indent <= 3 {
+            if let Some(length) = footnote_label_length(trimmed) {
+                if trimmed[length..].starts_with(':') {
+                    definitions.push((
+                        trimmed[2..length - 1].to_owned(),
+                        offset + indent..offset + indent + length,
+                    ));
                 }
             }
         }
@@ -867,6 +865,11 @@ mod tests {
         assert_eq!(&source[links[0].range.clone()], "[^source]");
         assert_eq!(links[0].target, NoteLinkTarget::SourceOffset(74));
         assert_eq!(links[1].target, NoteLinkTarget::SourceOffset(24));
+    }
+
+    #[test]
+    fn ignores_non_ascii_indentation_before_footnote_definitions() {
+        assert!(note_links("Text[^source]\n\u{a0}[^source]: Explanation").is_empty());
     }
 
     #[test]

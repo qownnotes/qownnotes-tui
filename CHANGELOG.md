@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Automatic continuation of Markdown lists and checklists when pressing Enter in
+  the editor, with empty items ending the list.
 - Soft wrapping in the note editor, including cursor tracking and mouse selection
   across wrapped rows.
 

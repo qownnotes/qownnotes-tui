@@ -226,7 +226,7 @@ fn encode_source_offset(offset: usize) -> Option<Color> {
     })
 }
 
-fn list_marker_end(line: &str) -> Option<usize> {
+pub(crate) fn list_marker_end(line: &str) -> Option<usize> {
     let indent = line.len() - line.trim_start().len();
     let trimmed = &line[indent..];
     if ["- ", "* ", "+ "]
@@ -257,6 +257,10 @@ fn checkbox_marker(text: &str) -> Option<(usize, CheckboxState)> {
         (CheckboxState::Checked, rest)
     };
     (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((3, state))
+}
+
+pub(crate) fn checkbox_marker_end(text: &str) -> Option<usize> {
+    checkbox_marker(text).map(|(end, _)| end)
 }
 
 fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {

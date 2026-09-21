@@ -653,7 +653,7 @@ impl App {
                 let mut encoded = [0; 4];
                 self.insert_editor_text(character.encode_utf8(&mut encoded));
             }
-            KeyCode::Enter => self.insert_editor_text("\n"),
+            KeyCode::Enter => self.handle_editor_enter(),
             KeyCode::Tab => self.insert_editor_text("    "),
             KeyCode::Backspace if self.editor_selection().is_some() => {
                 self.insert_editor_text("");
@@ -838,6 +838,51 @@ impl App {
         self.editor_cursor = start + text.len();
         self.editor_selection_anchor = None;
         self.mark_dirty();
+    }
+
+    fn handle_editor_enter(&mut self) {
+        let text_after_cursor = &self.content[self.editor_cursor..];
+        if self.editor_selection().is_some()
+            || (!text_after_cursor.is_empty() && !text_after_cursor.starts_with('\n'))
+        {
+            self.insert_editor_text("\n");
+            return;
+        }
+
+        let line_start = self.content[..self.editor_cursor]
+            .rfind('\n')
+            .map_or(0, |start| start + 1);
+        let line = &self.content[line_start..self.editor_cursor];
+        let Some(marker_end) = crate::markdown::list_marker_end(line) else {
+            self.insert_editor_text("\n");
+            return;
+        };
+        let indent_end = line.len() - line.trim_start().len();
+        let checkbox_end = crate::markdown::checkbox_marker_end(&line[marker_end..]);
+        let text_start = marker_end + checkbox_end.unwrap_or(0);
+
+        if line[text_start..].trim().is_empty() {
+            self.content
+                .replace_range(line_start..self.editor_cursor, "");
+            self.editor_cursor = line_start;
+            self.editor_selection_anchor = None;
+            self.mark_dirty();
+            return;
+        }
+
+        let marker = &line[indent_end..marker_end];
+        let marker = if let Some(digits) = marker.strip_suffix(". ") {
+            digits
+                .parse::<u128>()
+                .ok()
+                .and_then(|number| number.checked_add(1))
+                .map_or_else(|| marker.to_owned(), |number| format!("{number}. "))
+        } else {
+            marker.to_owned()
+        };
+        let checkbox = checkbox_end.map_or("", |_| "[ ] ");
+        let continuation = format!("\n{}{marker}{checkbox}", &line[..indent_end]);
+        self.insert_editor_text(&continuation);
     }
 
     fn cut_editor_selection(&mut self) {
@@ -3571,6 +3616,67 @@ mod tests {
         assert!(!root.path().join("note.md").exists());
         assert_eq!(app.current_note.as_deref(), Some(Path::new("content!.md")));
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn enter_continues_list_items_with_their_indent() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+
+        for (content, expected) in [
+            ("- item", "- item\n- "),
+            ("    * nested", "    * nested\n    * "),
+            ("9. item", "9. item\n10. "),
+            ("  - [x] done", "  - [x] done\n  - [ ] "),
+        ] {
+            app.content = content.into();
+            app.persisted_content.clone_from(&app.content);
+            app.editor_cursor = app.content.len();
+
+            app.handle_editor_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+            assert_eq!(app.content, expected);
+            assert_eq!(app.editor_cursor, expected.len());
+            assert!(app.dirty);
+        }
+    }
+
+    #[test]
+    fn enter_removes_empty_list_markers() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+
+        for content in ["- ", "  3. ", "\t- [ ] "] {
+            app.content = content.into();
+            app.persisted_content.clone_from(&app.content);
+            app.editor_cursor = app.content.len();
+
+            app.handle_editor_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+            assert_eq!(app.content, "");
+            assert_eq!(app.editor_cursor, 0);
+            assert!(app.dirty);
+        }
     }
 
     #[test]

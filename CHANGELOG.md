@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Soft wrapping in the note editor, including cursor tracking and mouse selection
+  across wrapped rows.
+
 ### Fixed
 
 - Prevented non-ASCII indentation from causing a panic while detecting Markdown

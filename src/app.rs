@@ -3125,6 +3125,46 @@ mod tests {
     }
 
     #[test]
+    fn editor_soft_wraps_and_keeps_the_cursor_visible() {
+        let root = tempfile::tempdir().unwrap();
+        let content = "abcdefghijklmnopqrstuvwxyz".repeat(4);
+        fs::write(root.path().join("note.md"), &content).unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.pane = Pane::Viewer;
+        app.editing = true;
+        app.editor_cursor = content.len();
+        app.editor_horizontal_scroll = 10;
+        let mut terminal = Terminal::new(TestBackend::new(20, 8)).unwrap();
+
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+
+        assert_eq!(app.editor_horizontal_scroll, 0);
+        assert!(app.editor_scroll > 0);
+        assert!(
+            app.editor_text_cells
+                .iter()
+                .any(|cell| cell.end == app.editor_cursor)
+        );
+        let first_row = app.editor_text_cells.iter().map(|cell| cell.row).min();
+        let last_row = app.editor_text_cells.iter().map(|cell| cell.row).max();
+        assert_ne!(first_row, last_row);
+    }
+
+    #[test]
     fn navigating_notes_loads_content_without_moving_focus() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("first.md"), "first").unwrap();

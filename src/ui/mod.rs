@@ -308,43 +308,35 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let viewport_width = area.width.saturating_sub(2).max(1);
     let viewport_height = area.height.saturating_sub(2).max(1);
     app.editor_page_size = viewport_height;
-    let before_cursor = &app.content[..app.editor_cursor];
-    let cursor_line = before_cursor.bytes().filter(|byte| *byte == b'\n').count() as u16;
-    let line_start = before_cursor.rfind('\n').map_or(0, |index| index + 1);
-    let cursor_column = app.content[line_start..app.editor_cursor].chars().count() as u16;
-
-    if cursor_line < app.editor_scroll {
-        app.editor_scroll = cursor_line;
-    } else if cursor_line >= app.editor_scroll.saturating_add(viewport_height) {
-        app.editor_scroll = cursor_line.saturating_sub(viewport_height - 1);
-    }
-    if cursor_column < app.editor_horizontal_scroll {
-        app.editor_horizontal_scroll = cursor_column;
-    } else if cursor_column >= app.editor_horizontal_scroll.saturating_add(viewport_width) {
-        app.editor_horizontal_scroll = cursor_column.saturating_sub(viewport_width - 1);
-    }
-
-    frame.render_widget(
-        Paragraph::new(markdown::highlight_selection(
-            &app.content,
-            &app.theme,
-            app.editor_selection(),
-        ))
-        .block(pane_block("Editor", true, app))
-        .scroll((app.editor_scroll, app.editor_horizontal_scroll)),
+    app.editor_horizontal_scroll = 0;
+    let paragraph = Paragraph::new(markdown::highlight_selection(
+        &app.content,
+        &app.theme,
+        app.editor_selection(),
+    ))
+    .block(pane_block("Editor", true, app))
+    .wrap(Wrap { trim: false });
+    let max_scroll = paragraph
+        .line_count(viewport_width)
+        .saturating_sub(viewport_height as usize)
+        .min(u16::MAX as usize) as u16;
+    app.editor_scroll = scroll_showing_offset(
+        &app.content,
         area,
+        app.editor_scroll.min(max_scroll),
+        max_scroll,
+        app.editor_cursor,
     );
+
+    frame.render_widget(paragraph.scroll((app.editor_scroll, 0)), area);
     app.editor_text_cells = text_cells(
         &app.content,
         area,
-        None,
-        (app.editor_scroll, app.editor_horizontal_scroll),
+        Some(Wrap { trim: false }),
+        (app.editor_scroll, 0),
     );
-    let position =
-        cursor_cell_position(&app.editor_text_cells, app.editor_cursor, area).unwrap_or((
-            area.x + 1 + cursor_column.saturating_sub(app.editor_horizontal_scroll),
-            area.y + 1 + cursor_line.saturating_sub(app.editor_scroll),
-        ));
+    let position = cursor_cell_position(&app.editor_text_cells, app.editor_cursor, area)
+        .unwrap_or((area.x.saturating_add(1), area.y.saturating_add(1)));
     frame.set_cursor_position(position);
 }
 

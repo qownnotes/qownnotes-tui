@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the editor, with empty items ending the list.
 - Soft wrapping in the note editor, including cursor tracking and mouse selection
   across wrapped rows.
+- In-note text search in the viewer and editor with `/` or `Ctrl-f`, match
+  navigation with `F3` and `Shift-F3`, and automatic reuse of note-list searches.
 
 ### Fixed
 

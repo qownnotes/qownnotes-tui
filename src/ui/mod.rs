@@ -161,7 +161,12 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let text = if app.current_note.is_some() {
-        markdown::highlight_selection(&app.content, &app.theme, app.viewer_selection())
+        markdown::highlight_selection(
+            &app.content,
+            &app.theme,
+            app.viewer_selection()
+                .or_else(|| app.note_search_match.clone()),
+        )
     } else {
         "Select a note to preview it.".into()
     };
@@ -182,8 +187,9 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
             app.status = format!("Heading not found: {heading}");
         }
     }
+    let title = note_pane_title("Viewer", app);
     let paragraph = Paragraph::new(text)
-        .block(pane_block("Viewer", app.pane == Pane::Viewer, app))
+        .block(pane_block(&title, app.pane == Pane::Viewer, app))
         .wrap(Wrap { trim: false });
     let line_count = paragraph.line_count(viewport_width);
     app.viewer_page_size = viewport_height.max(1);
@@ -312,9 +318,10 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let paragraph = Paragraph::new(markdown::highlight_selection(
         &app.content,
         &app.theme,
-        app.editor_selection(),
+        app.editor_selection()
+            .or_else(|| app.note_search_match.clone()),
     ))
-    .block(pane_block("Editor", true, app))
+    .block(pane_block(&note_pane_title("Editor", app), true, app))
     .wrap(Wrap { trim: false });
     let max_scroll = paragraph
         .line_count(viewport_width)
@@ -429,9 +436,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let help = if app.loading {
         " scanning "
     } else if app.editing {
-        " Shift-arrows select  Ctrl-Space toggle checkbox  Ctrl-x/c/v cut/copy/paste  Ctrl-s save  Esc close "
+        " / or Ctrl-f find  F3 next  Shift-F3 previous  Ctrl-Space toggle  Ctrl-s save  Esc close "
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
-        " n new  d delete  / search  e edit  j/k scroll  s settings  ? help  q quit "
+        " n new  d delete  / or Ctrl-f search  F3 next  e edit  j/k scroll  ? help  q quit "
     } else {
         " Enter filter  Left/Right tree  s settings  R reload  ? help  q quit "
     };
@@ -466,7 +473,8 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Enter       activate a folder filter, note, or viewer\n\
              Ctrl-Space  open link or toggle checkbox at the cursor\n\
              Mouse       select text, activate items/links, or scroll panes\n\
-             /           search note names and text\n\
+             /, Ctrl-f   search notes, or find text in viewer/editor\n\
+             F3/Shift-F3 next/previous match in the current note\n\
              n / Ctrl-n  create a timestamped note\n\
              d           delete the selected note\n\
              e           edit the selected note\n\
@@ -573,6 +581,24 @@ fn pane_block(title: &str, active: bool, app: &App) -> Block<'static> {
         .title(format!(" {title} "))
         .borders(Borders::ALL)
         .border_style(style)
+}
+
+fn note_pane_title(label: &str, app: &App) -> String {
+    if app.note_searching {
+        format!("Find: {}_", app.note_search_query)
+    } else if !app.note_search_query.is_empty() {
+        let current = if app.note_search_match_count == 0 {
+            0
+        } else {
+            app.note_search_match_index + 1
+        };
+        format!(
+            "{label} - Find: {} ({}/{})",
+            app.note_search_query, current, app.note_search_match_count
+        )
+    } else {
+        label.into()
+    }
 }
 
 fn highlight_style(app: &App) -> Style {

@@ -60,7 +60,8 @@ command writes the completion script to standard output.
 | `n`, `Ctrl-n`           | Create a timestamped note                          |
 | `d`                     | Delete a note after confirmation                   |
 | `e`                     | Edit the selected note                             |
-| `/`                     | Search note names and text                         |
+| `/`, `Ctrl-f`           | Search notes or find text in the viewer/editor     |
+| `F3`, `Shift-F3`        | Select the next or previous in-note match          |
 | `Ctrl-s`                | Save the note                                      |
 | `Esc`                   | Leave editor or return to the note list            |
 | `Ctrl-r`                | Discard edits and reload from disk                 |
@@ -73,7 +74,10 @@ command writes the completion script to standard output.
 
 Search terms are case-insensitive and all terms must match; use quotes to search
 for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The
-folder pane contains each configured note folder, an `All notes` item, the note
+same search term is highlighted when opening a matching note. In the viewer or
+editor, `/` or `Ctrl-f` finds text without changing the note filter; use `F3`
+and `Shift-F3` to move between matches. The folder pane contains each configured
+note folder, an `All notes` item, the note
 folder root (`/`), and its expandable note subfolders. Selecting a subfolder
 shows notes directly in that folder; selecting `All notes` shows the complete
 tree. Folder disclosure arrows can also be clicked to expand or collapse them.

@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     fs,
+    ops::Range,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{self, Sender},
@@ -15,6 +16,7 @@ use crossterm::event::{
 };
 use percent_encoding::percent_decode_str;
 use ratatui::layout::Rect;
+use regex::RegexBuilder;
 
 use crate::{
     clipboard::Clipboard,
@@ -111,6 +113,11 @@ pub struct App {
     pub loading: bool,
     pub search_query: String,
     pub searching: bool,
+    pub note_search_query: String,
+    pub note_searching: bool,
+    pub note_search_match: Option<Range<usize>>,
+    pub note_search_match_index: usize,
+    pub note_search_match_count: usize,
     pub show_help: bool,
     pub show_settings: bool,
     pub confirm_delete: bool,
@@ -177,6 +184,11 @@ impl App {
             loading: true,
             search_query: String::new(),
             searching: false,
+            note_search_query: String::new(),
+            note_searching: false,
+            note_search_match: None,
+            note_search_match_index: 0,
+            note_search_match_count: 0,
             show_help: false,
             show_settings: false,
             confirm_delete: false,
@@ -388,6 +400,28 @@ impl App {
                 _ => {}
             }
         }
+        if self.note_searching {
+            self.handle_note_search_key(key);
+            return;
+        }
+        let starts_search = key.code == KeyCode::Char('/')
+            || (key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL));
+        if starts_search
+            && (self.editing || self.pane == Pane::Viewer)
+            && self.current_note.is_some()
+        {
+            self.start_note_search();
+            return;
+        }
+        if key.code == KeyCode::F(3) && !self.note_search_query.is_empty() {
+            let direction = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                -1
+            } else {
+                1
+            };
+            self.move_note_search_match(direction);
+            return;
+        }
         if self.editing {
             self.handle_editor_key(key);
             return;
@@ -448,6 +482,14 @@ impl App {
                 self.searching = true;
                 self.pane = Pane::Notes;
                 self.update_search_status();
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.searching = true;
+                self.pane = Pane::Notes;
+                self.update_search_status();
+            }
+            KeyCode::Esc if !self.note_search_query.is_empty() && self.search_query.is_empty() => {
+                self.clear_note_search();
             }
             KeyCode::Esc if !self.search_query.is_empty() => {
                 self.search_query.clear();
@@ -515,6 +557,133 @@ impl App {
         }
     }
 
+    fn start_note_search(&mut self) {
+        if self.note_search_query.is_empty() && !self.search_query.is_empty() {
+            self.note_search_query.clone_from(&self.search_query);
+            self.update_note_search();
+        }
+        self.note_searching = true;
+        self.update_note_search_status();
+    }
+
+    fn handle_note_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.clear_note_search(),
+            KeyCode::Enter => {
+                self.note_searching = false;
+                self.update_note_search_status();
+            }
+            KeyCode::F(3) => {
+                let direction = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    -1
+                } else {
+                    1
+                };
+                self.move_note_search_match(direction);
+            }
+            KeyCode::Backspace => {
+                self.note_search_query.pop();
+                self.update_note_search();
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.note_search_query.push(character);
+                self.update_note_search();
+            }
+            _ => {}
+        }
+    }
+
+    fn update_note_search(&mut self) {
+        let matches = note_search_matches(&self.content, &self.note_search_query);
+        self.note_search_match_count = matches.len();
+        self.note_search_match_index = 0;
+        self.note_search_match = matches.first().cloned();
+        self.reveal_note_search_match();
+        self.update_note_search_status();
+    }
+
+    fn move_note_search_match(&mut self, direction: isize) {
+        let matches = note_search_matches(&self.content, &self.note_search_query);
+        if matches.is_empty() {
+            self.note_search_match = None;
+            self.note_search_match_index = 0;
+            self.note_search_match_count = 0;
+            self.update_note_search_status();
+            return;
+        }
+        let current = self
+            .note_search_match
+            .as_ref()
+            .and_then(|active| matches.iter().position(|range| range == active))
+            .unwrap_or(0);
+        self.note_search_match_index = if direction < 0 {
+            current.checked_sub(1).unwrap_or(matches.len() - 1)
+        } else {
+            (current + 1) % matches.len()
+        };
+        self.note_search_match_count = matches.len();
+        self.note_search_match = Some(matches[self.note_search_match_index].clone());
+        self.reveal_note_search_match();
+        self.update_note_search_status();
+    }
+
+    fn reveal_note_search_match(&mut self) {
+        let Some(range) = &self.note_search_match else {
+            return;
+        };
+        if self.editing {
+            self.editor_cursor = range.start;
+            self.editor_selection_anchor = None;
+        } else {
+            self.viewer_cursor = range.start;
+            self.viewer_selection_anchor = None;
+            self.viewer_follow_selection = true;
+        }
+    }
+
+    fn update_note_search_status(&mut self) {
+        self.status = if self.note_search_query.is_empty() {
+            "Find: ".into()
+        } else if self.note_search_match_count == 0 {
+            format!("Find: {} (no matches)", self.note_search_query)
+        } else {
+            format!(
+                "Find: {} ({} of {})",
+                self.note_search_query,
+                self.note_search_match_index + 1,
+                self.note_search_match_count
+            )
+        };
+    }
+
+    fn clear_note_search(&mut self) {
+        self.note_search_query.clear();
+        self.note_searching = false;
+        self.note_search_match = None;
+        self.note_search_match_index = 0;
+        self.note_search_match_count = 0;
+        self.status = self
+            .current_note
+            .as_ref()
+            .map_or_else(String::new, |path| path.display().to_string());
+    }
+
+    fn sync_note_search_from_list(&mut self) {
+        self.note_search_query.clone_from(&self.search_query);
+        self.note_searching = false;
+        if self.note_search_query.is_empty() {
+            self.note_search_match = None;
+            self.note_search_match_index = 0;
+            self.note_search_match_count = 0;
+        } else {
+            self.update_note_search();
+        }
+    }
+
     fn apply_search(&mut self) {
         let selected_path = self
             .current_note
@@ -543,6 +712,7 @@ impl App {
             self.persisted_content.clear();
             self.current_note = None;
             self.viewer_scroll = 0;
+            self.sync_note_search_from_list();
         } else {
             self.load_selected_note();
         }
@@ -775,6 +945,11 @@ impl App {
     }
 
     fn mark_dirty(&mut self) {
+        self.note_search_query.clear();
+        self.note_searching = false;
+        self.note_search_match = None;
+        self.note_search_match_index = 0;
+        self.note_search_match_count = 0;
         self.dirty = self.content != self.persisted_content;
         if self.dirty {
             self.dirty_since.get_or_insert_with(Instant::now);
@@ -1344,6 +1519,7 @@ impl App {
                         self.record_note_navigation(path.clone());
                     }
                     self.status = path.display().to_string();
+                    self.sync_note_search_from_list();
                     return true;
                 }
                 Err(error) => {
@@ -1450,6 +1626,7 @@ impl App {
                 self.viewer_heading = None;
                 self.note_history_index = Some(target_index);
                 self.status = entry.path.display().to_string();
+                self.sync_note_search_from_list();
             }
             Err(error) => self.status = error.to_string(),
         }
@@ -1839,6 +2016,7 @@ impl App {
             self.persisted_content.clear();
             self.current_note = None;
             self.viewer_scroll = 0;
+            self.sync_note_search_from_list();
         } else {
             self.current_note = None;
             self.load_selected_note();
@@ -1877,6 +2055,7 @@ impl App {
                         self.editor_cursor -= 1;
                     }
                     self.viewer_scroll = 0;
+                    self.update_note_search();
                     self.status = format!("Reloaded {} after external change", relative.display());
                 }
             }
@@ -1985,6 +2164,7 @@ impl App {
                 self.dirty = false;
                 self.dirty_since = None;
                 self.external_conflict = false;
+                self.update_note_search();
                 self.status = format!("Reloaded {}; local edits discarded", relative.display());
             }
             Err(error) => self.status = error.to_string(),
@@ -2238,6 +2418,27 @@ fn search_terms(query: &str) -> Vec<String> {
     terms
 }
 
+fn note_search_matches(content: &str, query: &str) -> Vec<Range<usize>> {
+    let mut matches = search_terms(query)
+        .into_iter()
+        .flat_map(|term| {
+            RegexBuilder::new(&regex::escape(&term))
+                .case_insensitive(true)
+                .build()
+                .into_iter()
+                .flat_map(move |regex| {
+                    regex
+                        .find_iter(content)
+                        .map(|found| found.start()..found.end())
+                        .collect::<Vec<_>>()
+                })
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|range| (range.start, range.end));
+    matches.dedup();
+    matches
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2320,6 +2521,83 @@ mod tests {
         app.apply_search();
         assert_eq!(app.notes.len(), 1);
         assert_eq!(app.notes[0].relative_path, Path::new("meeting.md"));
+    }
+
+    #[test]
+    fn list_search_is_reused_as_an_in_note_search() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "before Matching after matching",
+        )
+        .unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+
+        app.search_query = "matching".into();
+        app.apply_search();
+
+        assert_eq!(app.note_search_query, "matching");
+        assert_eq!(app.note_search_match, Some(7..15));
+        assert_eq!(app.note_search_match_count, 2);
+        assert_eq!(app.viewer_cursor, 7);
+    }
+
+    #[test]
+    fn viewer_and_editor_find_without_changing_the_note_filter_or_content() {
+        let mut app = App::new(Config {
+            note_folders: vec![],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.content = "one target two TARGET".into();
+        app.persisted_content.clone_from(&app.content);
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
+        for character in "target".chars() {
+            app.handle_key(
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+                &scan_tx,
+            );
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &scan_tx);
+
+        assert!(!app.searching);
+        assert!(app.search_query.is_empty());
+        assert_eq!(app.note_search_match, Some(4..10));
+        assert_eq!(app.note_search_match_count, 2);
+
+        app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE), &scan_tx);
+        assert_eq!(app.note_search_match, Some(15..21));
+        assert_eq!(app.viewer_cursor, 15);
+
+        app.editing = true;
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            &scan_tx,
+        );
+        assert!(app.note_searching);
+        assert_eq!(app.content, "one target two TARGET");
     }
 
     #[test]

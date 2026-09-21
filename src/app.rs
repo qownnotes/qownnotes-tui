@@ -545,6 +545,8 @@ impl App {
                 self.search_query.pop();
                 self.apply_search();
             }
+            KeyCode::Down => self.move_selection(1),
+            KeyCode::Up => self.move_selection(-1),
             KeyCode::Char(character)
                 if !key
                     .modifiers
@@ -2521,6 +2523,47 @@ mod tests {
         app.apply_search();
         assert_eq!(app.notes.len(), 1);
         assert_eq!(app.notes[0].relative_path, Path::new("meeting.md"));
+    }
+
+    #[test]
+    fn arrow_keys_navigate_note_list_search_results() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("first.md"), "matching first").unwrap();
+        fs::write(root.path().join("second.md"), "matching second").unwrap();
+        fs::write(root.path().join("unrelated.md"), "other").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::Alphabetical { descending: false },
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.searching = true;
+        app.search_query = "matching".into();
+        app.apply_search();
+        let (scan_tx, _scan_rx) = mpsc::channel();
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &scan_tx);
+
+        assert!(app.searching);
+        assert_eq!(app.search_query, "matching");
+        assert_eq!(app.notes.len(), 2);
+        assert_eq!(app.selected_note, 1);
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("second.md")));
+        assert_eq!(app.content, "matching second");
+
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), &scan_tx);
+
+        assert!(app.searching);
+        assert_eq!(app.selected_note, 0);
+        assert_eq!(app.current_note.as_deref(), Some(Path::new("first.md")));
+        assert_eq!(app.content, "matching first");
     }
 
     #[test]

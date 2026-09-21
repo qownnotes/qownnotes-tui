@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Allowed Up and Down to navigate filtered note results while entering a search.
 - Prevented non-ASCII indentation from causing a panic while detecting Markdown
   footnote definitions.
 

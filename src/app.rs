@@ -797,7 +797,7 @@ impl App {
         {
             self.editor_selection_anchor
                 .get_or_insert(self.editor_cursor);
-            self.move_editor_cursor(key.code);
+            self.move_editor_cursor(key.code, key.modifiers.contains(KeyModifiers::CONTROL));
             return;
         }
         match key.code {
@@ -844,13 +844,9 @@ impl App {
                 self.content.drain(self.editor_cursor..next);
                 self.mark_dirty();
             }
-            KeyCode::Left => {
+            KeyCode::Left | KeyCode::Right => {
                 self.editor_selection_anchor = None;
-                self.editor_cursor = previous_boundary(&self.content, self.editor_cursor);
-            }
-            KeyCode::Right => {
-                self.editor_selection_anchor = None;
-                self.editor_cursor = next_boundary(&self.content, self.editor_cursor);
+                self.move_editor_cursor(key.code, key.modifiers.contains(KeyModifiers::CONTROL));
             }
             KeyCode::Up => {
                 self.editor_selection_anchor = None;
@@ -1076,8 +1072,14 @@ impl App {
         self.status = format!("Cut {} characters", text.chars().count());
     }
 
-    fn move_editor_cursor(&mut self, key: KeyCode) {
+    fn move_editor_cursor(&mut self, key: KeyCode, by_word: bool) {
         match key {
+            KeyCode::Left if by_word => {
+                self.editor_cursor = previous_word_boundary(&self.content, self.editor_cursor)
+            }
+            KeyCode::Right if by_word => {
+                self.editor_cursor = next_word_boundary(&self.content, self.editor_cursor)
+            }
             KeyCode::Left => {
                 self.editor_cursor = previous_boundary(&self.content, self.editor_cursor)
             }
@@ -2291,6 +2293,67 @@ fn next_boundary(content: &str, cursor: usize) -> usize {
         .chars()
         .next()
         .map_or(cursor, |character| cursor + character.len_utf8())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Whitespace,
+    Word,
+    Punctuation,
+}
+
+fn char_class(character: char) -> CharClass {
+    if character.is_whitespace() {
+        CharClass::Whitespace
+    } else if character.is_alphanumeric() || character == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punctuation
+    }
+}
+
+/// Returns the start of the next word, skipping the rest of the current word or
+/// punctuation run and any whitespace that follows it.
+fn next_word_boundary(content: &str, cursor: usize) -> usize {
+    let mut characters = content[cursor..].char_indices().peekable();
+    let Some(&(_, first)) = characters.peek() else {
+        return cursor;
+    };
+    let class = char_class(first);
+    if class != CharClass::Whitespace {
+        while characters
+            .next_if(|&(_, character)| char_class(character) == class)
+            .is_some()
+        {}
+    }
+    while characters
+        .next_if(|&(_, character)| char_class(character) == CharClass::Whitespace)
+        .is_some()
+    {}
+    characters
+        .peek()
+        .map_or(content.len(), |&(index, _)| cursor + index)
+}
+
+/// Returns the start of the previous word, skipping any whitespace before the
+/// cursor and then the preceding word or punctuation run.
+fn previous_word_boundary(content: &str, cursor: usize) -> usize {
+    let mut characters = content[..cursor].char_indices().rev().peekable();
+    while characters
+        .next_if(|&(_, character)| char_class(character) == CharClass::Whitespace)
+        .is_some()
+    {}
+    let Some(&(_, first)) = characters.peek() else {
+        return 0;
+    };
+    let class = char_class(first);
+    let mut start = cursor;
+    while let Some((index, _)) =
+        characters.next_if(|&(_, character)| char_class(character) == class)
+    {
+        start = index;
+    }
+    start
 }
 
 fn move_vertical(content: &str, cursor: usize, delta: isize) -> usize {
@@ -4344,6 +4407,64 @@ mod tests {
 
         app.handle_editor_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
         assert_eq!(app.editor_cursor, app.content.len());
+    }
+
+    #[test]
+    fn control_arrows_move_editor_cursor_by_word() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.content = "héllo  wörld, foo\nbar".into();
+        app.editor_cursor = 0;
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL);
+        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
+
+        let mut forward = Vec::new();
+        for _ in 0..6 {
+            app.handle_editor_key(right);
+            forward.push(app.editor_cursor);
+        }
+        let expected = [
+            "héllo  ".len(),
+            "héllo  wörld".len(),
+            "héllo  wörld, ".len(),
+            "héllo  wörld, foo\n".len(),
+            app.content.len(),
+            app.content.len(),
+        ];
+        assert_eq!(forward, expected);
+
+        let mut backward = Vec::new();
+        for _ in 0..6 {
+            app.handle_editor_key(left);
+            backward.push(app.editor_cursor);
+        }
+        let expected = [
+            "héllo  wörld, foo\n".len(),
+            "héllo  wörld, ".len(),
+            "héllo  wörld".len(),
+            "héllo  ".len(),
+            0,
+            0,
+        ];
+        assert_eq!(backward, expected);
+
+        app.handle_editor_key(KeyEvent::new(
+            KeyCode::Right,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(app.editor_selection(), Some(0.."héllo  ".len()));
+        app.handle_editor_key(right);
+        assert_eq!(app.editor_selection(), None);
     }
 
     #[test]

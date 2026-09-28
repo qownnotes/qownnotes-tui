@@ -458,12 +458,13 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(58, 24, frame.area());
+    let area = centered_rect(58, 29, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
             "Arrow keys  move cursor or navigate the folder tree\n\
              Shift-Arrows select text in viewer or editor\n\
+             Ctrl-Left/Right  previous or next word in editor\n\
              j / k       move list selection or scroll viewer\n\
              PgUp/PgDn   scroll viewer by one page\n\
              Home / End  first or last viewer line\n\

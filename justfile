@@ -1,6 +1,6 @@
 set dotenv-load
 
-import ".shared/common.just"
+import? ".shared/common.just"
 
 default:
     @just --list

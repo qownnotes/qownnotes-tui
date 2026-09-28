@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Word-wise cursor movement in the editor with `Ctrl-Left` and `Ctrl-Right`,
   including selection with `Ctrl-Shift-Left` and `Ctrl-Shift-Right`.
 
+### Fixed
+
+- Allowed typing `/` in the editor instead of opening in-note search; use
+  `Ctrl-f` to search while editing.
+
 ## [0.9.0] - 2026-09-21
 
 ### Added

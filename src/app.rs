@@ -404,7 +404,7 @@ impl App {
             self.handle_note_search_key(key);
             return;
         }
-        let starts_search = key.code == KeyCode::Char('/')
+        let starts_search = (key.code == KeyCode::Char('/') && !self.editing)
             || (key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL));
         if starts_search
             && (self.editing || self.pane == Pane::Viewer)
@@ -2698,12 +2698,20 @@ mod tests {
         assert_eq!(app.viewer_cursor, 15);
 
         app.editing = true;
+        app.editor_cursor = 0;
         app.handle_key(
             KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
             &scan_tx,
         );
+        assert!(!app.note_searching);
+        assert_eq!(app.content, "/one target two TARGET");
+
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            &scan_tx,
+        );
         assert!(app.note_searching);
-        assert_eq!(app.content, "one target two TARGET");
+        assert_eq!(app.content, "/one target two TARGET");
     }
 
     #[test]

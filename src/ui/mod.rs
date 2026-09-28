@@ -436,7 +436,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let help = if app.loading {
         " scanning "
     } else if app.editing {
-        " / or Ctrl-f find  F3 next  Shift-F3 previous  Ctrl-Space toggle  Ctrl-s save  Esc close "
+        " Ctrl-f find  F3 next  Shift-F3 previous  Ctrl-Space toggle  Ctrl-s save  Esc close "
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
         " n new  d delete  / or Ctrl-f search  F3 next  e edit  j/k scroll  ? help  q quit "
     } else {
@@ -458,7 +458,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(58, 29, frame.area());
+    let area = centered_rect(58, 30, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
@@ -474,7 +474,8 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Enter       activate a folder filter, note, or viewer\n\
              Ctrl-Space  open link or toggle checkbox at the cursor\n\
              Mouse       select text, activate items/links, or scroll panes\n\
-             /, Ctrl-f   search notes, or find text in viewer/editor\n\
+             /, Ctrl-f   search notes, or find text in viewer\n\
+             Ctrl-f      find text in editor\n\
              F3/Shift-F3 next/previous match in the current note\n\
              n / Ctrl-n  create a timestamped note\n\
              d           delete the selected note\n\

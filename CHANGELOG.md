@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Word-wise cursor movement in the editor with `Ctrl-Left` and `Ctrl-Right`,
-  including selection with `Ctrl-Shift-Left` and `Ctrl-Shift-Right`.
+- Word-wise cursor movement in the viewer and editor with `Ctrl-Left` and
+  `Ctrl-Right`, including selection with `Ctrl-Shift-Left` and
+  `Ctrl-Shift-Right`.
 
 ### Fixed
 

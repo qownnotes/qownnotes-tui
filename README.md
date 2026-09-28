@@ -68,7 +68,7 @@ command writes the completion script to standard output.
 | `Ctrl-r`                  | Discard edits and reload from disk                 |
 | `PageUp`, `PageDown`      | Move by one page while editing                     |
 | `Ctrl-Home`, `Ctrl-End`   | Move to note start or end while editing            |
-| `Ctrl-Left`, `Ctrl-Right` | Move by word while editing                         |
+| `Ctrl-Left`, `Ctrl-Right` | Move by word in the viewer or editor               |
 | `s`                       | Open settings                                      |
 | `R`                       | Rescan the active note folder                      |
 | `?`                       | Show help                                          |

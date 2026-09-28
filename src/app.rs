@@ -17,6 +17,7 @@ use crossterm::event::{
 use percent_encoding::percent_decode_str;
 use ratatui::layout::Rect;
 use regex::RegexBuilder;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     clipboard::Clipboard,
@@ -433,7 +434,10 @@ impl App {
         if self.pane == Pane::Viewer && key.modifiers.contains(KeyModifiers::SHIFT) {
             match key.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
-                    self.extend_viewer_selection(key.code);
+                    self.extend_viewer_selection(
+                        key.code,
+                        key.modifiers.contains(KeyModifiers::CONTROL),
+                    );
                     return;
                 }
                 _ => {}
@@ -450,7 +454,10 @@ impl App {
         if self.pane == Pane::Viewer {
             match key.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
-                    self.move_viewer_cursor(key.code);
+                    self.move_viewer_cursor(
+                        key.code,
+                        key.modifiers.contains(KeyModifiers::CONTROL),
+                    );
                     return;
                 }
                 _ => {}
@@ -1090,21 +1097,25 @@ impl App {
         }
     }
 
-    fn extend_viewer_selection(&mut self, key: KeyCode) {
+    fn extend_viewer_selection(&mut self, key: KeyCode, by_word: bool) {
         self.viewer_selection_anchor
             .get_or_insert(self.viewer_cursor);
-        self.viewer_cursor = self.viewer_cursor_after(key);
+        self.viewer_cursor = self.viewer_cursor_after(key, by_word);
         self.viewer_follow_selection = true;
     }
 
-    fn move_viewer_cursor(&mut self, key: KeyCode) {
+    fn move_viewer_cursor(&mut self, key: KeyCode, by_word: bool) {
         self.viewer_selection_anchor = None;
-        self.viewer_cursor = self.viewer_cursor_after(key);
+        self.viewer_cursor = self.viewer_cursor_after(key, by_word);
         self.viewer_follow_selection = true;
     }
 
-    fn viewer_cursor_after(&self, key: KeyCode) -> usize {
+    fn viewer_cursor_after(&self, key: KeyCode, by_word: bool) -> usize {
         match key {
+            // The viewer renders the note source verbatim, so word boundaries in
+            // the content are always visible cursor positions.
+            KeyCode::Left if by_word => previous_word_boundary(&self.content, self.viewer_cursor),
+            KeyCode::Right if by_word => next_word_boundary(&self.content, self.viewer_cursor),
             KeyCode::Left => self
                 .viewer_text_cells
                 .iter()
@@ -2302,7 +2313,8 @@ enum CharClass {
     Punctuation,
 }
 
-fn char_class(character: char) -> CharClass {
+fn grapheme_class(grapheme: &str) -> CharClass {
+    let character = grapheme.chars().next().unwrap_or(' ');
     if character.is_whitespace() {
         CharClass::Whitespace
     } else if character.is_alphanumeric() || character == '_' {
@@ -2315,22 +2327,21 @@ fn char_class(character: char) -> CharClass {
 /// Returns the start of the next word, skipping the rest of the current word or
 /// punctuation run and any whitespace that follows it.
 fn next_word_boundary(content: &str, cursor: usize) -> usize {
-    let mut characters = content[cursor..].char_indices().peekable();
-    let Some(&(_, first)) = characters.peek() else {
+    let mut graphemes = content[cursor..]
+        .grapheme_indices(true)
+        .map(|(index, grapheme)| (index, grapheme_class(grapheme)))
+        .peekable();
+    let Some(&(_, class)) = graphemes.peek() else {
         return cursor;
     };
-    let class = char_class(first);
     if class != CharClass::Whitespace {
-        while characters
-            .next_if(|&(_, character)| char_class(character) == class)
-            .is_some()
-        {}
+        while graphemes.next_if(|&(_, next)| next == class).is_some() {}
     }
-    while characters
-        .next_if(|&(_, character)| char_class(character) == CharClass::Whitespace)
+    while graphemes
+        .next_if(|&(_, next)| next == CharClass::Whitespace)
         .is_some()
     {}
-    characters
+    graphemes
         .peek()
         .map_or(content.len(), |&(index, _)| cursor + index)
 }
@@ -2338,19 +2349,20 @@ fn next_word_boundary(content: &str, cursor: usize) -> usize {
 /// Returns the start of the previous word, skipping any whitespace before the
 /// cursor and then the preceding word or punctuation run.
 fn previous_word_boundary(content: &str, cursor: usize) -> usize {
-    let mut characters = content[..cursor].char_indices().rev().peekable();
-    while characters
-        .next_if(|&(_, character)| char_class(character) == CharClass::Whitespace)
+    let mut graphemes = content[..cursor]
+        .grapheme_indices(true)
+        .rev()
+        .map(|(index, grapheme)| (index, grapheme_class(grapheme)))
+        .peekable();
+    while graphemes
+        .next_if(|&(_, previous)| previous == CharClass::Whitespace)
         .is_some()
     {}
-    let Some(&(_, first)) = characters.peek() else {
+    let Some(&(_, class)) = graphemes.peek() else {
         return 0;
     };
-    let class = char_class(first);
     let mut start = cursor;
-    while let Some((index, _)) =
-        characters.next_if(|&(_, character)| char_class(character) == class)
-    {
+    while let Some((index, _)) = graphemes.next_if(|&(_, previous)| previous == class) {
         start = index;
     }
     start
@@ -3359,6 +3371,57 @@ mod tests {
             terminal.get_cursor_position().unwrap(),
             Position::new(cursor_cell.column, cursor_cell.row)
         );
+    }
+
+    #[test]
+    fn viewer_control_arrows_move_the_cursor_by_word() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.content = "cafe\u{301} **bold** text\nnext".into();
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL);
+        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
+
+        let mut forward = Vec::new();
+        for _ in 0..6 {
+            app.handle_key(right, &scan_tx);
+            forward.push(app.viewer_cursor);
+        }
+        let expected = [
+            "cafe\u{301} ".len(),
+            "cafe\u{301} **".len(),
+            "cafe\u{301} **bold".len(),
+            "cafe\u{301} **bold** ".len(),
+            "cafe\u{301} **bold** text\n".len(),
+            app.content.len(),
+        ];
+        assert_eq!(forward, expected);
+
+        app.handle_key(left, &scan_tx);
+        assert_eq!(app.viewer_cursor, "cafe\u{301} **bold** text\n".len());
+        app.handle_key(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            &scan_tx,
+        );
+        assert_eq!(
+            app.viewer_selection(),
+            Some("cafe\u{301} **bold** ".len().."cafe\u{301} **bold** text\n".len())
+        );
+        app.handle_key(left, &scan_tx);
+        assert_eq!(app.viewer_selection(), None);
+        assert_eq!(app.viewer_cursor, "cafe\u{301} **bold".len());
     }
 
     #[test]

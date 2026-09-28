@@ -464,7 +464,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
         Paragraph::new(
             "Arrow keys  move cursor or navigate the folder tree\n\
              Shift-Arrows select text in viewer or editor\n\
-             Ctrl-Left/Right  previous or next word in editor\n\
+             Ctrl-Left/Right  previous or next word\n\
              j / k       move list selection or scroll viewer\n\
              PgUp/PgDn   scroll viewer by one page\n\
              Home / End  first or last viewer line\n\

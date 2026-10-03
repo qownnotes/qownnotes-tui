@@ -833,7 +833,10 @@ impl App {
                 self.insert_editor_text(character.encode_utf8(&mut encoded));
             }
             KeyCode::Enter => self.handle_editor_enter(),
-            KeyCode::Tab => self.insert_editor_text("    "),
+            KeyCode::Tab => {
+                self.handle_editor_indent(key.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            KeyCode::BackTab => self.handle_editor_indent(true),
             KeyCode::Backspace if self.editor_selection().is_some() => {
                 self.insert_editor_text("");
             }
@@ -1018,6 +1021,73 @@ impl App {
         self.editor_cursor = start + text.len();
         self.editor_selection_anchor = None;
         self.mark_dirty();
+    }
+
+    fn handle_editor_indent(&mut self, unindent: bool) {
+        let selection = self
+            .editor_selection()
+            .unwrap_or(self.editor_cursor..self.editor_cursor);
+        let line_start = self.content[..selection.start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let line_end = self.content[line_start..]
+            .find('\n')
+            .map_or(self.content.len(), |index| line_start + index);
+        if !unindent
+            && self.editor_selection().is_none()
+            && crate::markdown::list_marker_end(&self.content[line_start..line_end]).is_none()
+        {
+            self.insert_editor_text("    ");
+            return;
+        }
+
+        // A selection ending at the next line's start excludes that line.
+        let end =
+            if selection.end > selection.start && self.content[..selection.end].ends_with('\n') {
+                selection.end - 1
+            } else {
+                selection.end
+            };
+        let starts: Vec<_> = std::iter::once(line_start)
+            .chain(
+                self.content[line_start..end]
+                    .match_indices('\n')
+                    .map(|(index, _)| line_start + index + 1),
+            )
+            .collect();
+        let mut changed = false;
+        for start in starts.into_iter().rev() {
+            let removed = if unindent {
+                if self.content[start..].starts_with('\t') {
+                    1
+                } else {
+                    self.content[start..]
+                        .bytes()
+                        .take(4)
+                        .take_while(|byte| *byte == b' ')
+                        .count()
+                }
+            } else {
+                0
+            };
+            let replacement = if unindent { "" } else { "    " };
+            if removed == 0 && replacement.is_empty() {
+                continue;
+            }
+            self.content
+                .replace_range(start..start + removed, replacement);
+            for position in std::iter::once(&mut self.editor_cursor)
+                .chain(self.editor_selection_anchor.iter_mut())
+            {
+                if *position >= start {
+                    *position = position.saturating_sub(removed).max(start) + replacement.len();
+                }
+            }
+            changed = true;
+        }
+        if changed {
+            self.mark_dirty();
+        }
     }
 
     fn handle_editor_enter(&mut self) {
@@ -4071,6 +4141,65 @@ mod tests {
         assert!(!root.path().join("note.md").exists());
         assert_eq!(app.current_note.as_deref(), Some(Path::new("content!.md")));
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn tab_and_shift_tab_indent_list_items_and_selected_lines() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+
+        for content in ["- ", "- [ ] ", "  * café", "9. item"] {
+            app.content = content.into();
+            app.persisted_content.clone_from(&app.content);
+            app.editor_cursor = content.len();
+            app.handle_editor_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            assert_eq!(app.content, format!("    {content}"));
+            assert_eq!(app.editor_cursor, content.len() + 4);
+            assert!(app.dirty);
+            app.handle_editor_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+            assert_eq!(app.content, content);
+            assert_eq!(app.editor_cursor, content.len());
+            assert!(!app.dirty);
+        }
+
+        for (content, expected) in [
+            ("    text", "text"),
+            ("  text", "text"),
+            ("\ttext", "text"),
+            ("text", "text"),
+            ("- [ ] ", "- [ ] "),
+        ] {
+            app.content = content.into();
+            app.editor_cursor = content.len();
+            app.handle_editor_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+            assert_eq!(app.content, expected);
+            assert_eq!(app.editor_cursor, expected.len());
+        }
+
+        app.content = "one\ntwo\nthree".into();
+        app.editor_selection_anchor = Some(0);
+        app.editor_cursor = 8;
+        app.handle_editor_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.content, "    one\n    two\nthree");
+        assert_eq!(app.editor_selection(), Some(4..16));
+        app.handle_editor_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(app.content, "one\ntwo\nthree");
+        assert_eq!(app.editor_selection(), Some(0..8));
+
+        app.editor_selection_anchor = None;
+        app.editor_cursor = 1;
+        app.handle_editor_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.content, "o    ne\ntwo\nthree");
     }
 
     #[test]

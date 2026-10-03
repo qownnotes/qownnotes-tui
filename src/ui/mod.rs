@@ -483,6 +483,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              s           open settings\n\
              Ctrl-s      save while editing\n\
              Ctrl-r      discard edits and reload from disk\n\
+             Tab/Shift-Tab  indent/un-indent in editor\n\
              PgUp/PgDn   move by one page while editing\n\
              Ctrl-Home/End  first or last editor position\n\
              Ctrl-x/c/v  cut, copy, or paste in editor\n\

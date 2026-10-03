@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Editor indentation with `Tab` and un-indentation with `Shift-Tab`, including
+  Markdown list/checklist items and selected lines.
+
 ## [1.0.0] - 2026-09-28
 
 ### Added

@@ -486,6 +486,8 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Tab/Shift-Tab  indent/un-indent in editor\n\
              PgUp/PgDn   move by one page while editing\n\
              Ctrl-Home/End  first or last editor position\n\
+             Ctrl-Backspace  delete previous word in editor\n\
+             Alt-Backspace   delete whole line in editor\n\
              Ctrl-x/c/v  cut, copy, or paste in editor\n\
              Ctrl-Shift-V  paste URL with fetched page title\n\
              Esc         leave editor or return to note list\n\

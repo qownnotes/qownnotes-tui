@@ -846,10 +846,18 @@ impl App {
             KeyCode::Backspace if self.editor_selection().is_some() => {
                 self.insert_editor_text("");
             }
+            KeyCode::Backspace if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.delete_editor_line();
+            }
             KeyCode::Backspace if self.editor_cursor > 0 => {
-                let previous = previous_boundary(&self.content, self.editor_cursor);
+                let previous = if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    previous_word_boundary(&self.content, self.editor_cursor)
+                } else {
+                    previous_boundary(&self.content, self.editor_cursor)
+                };
                 self.content.drain(previous..self.editor_cursor);
                 self.editor_cursor = previous;
+                self.editor_selection_anchor = None;
                 self.mark_dirty();
             }
             KeyCode::Delete if self.editor_selection().is_some() => {
@@ -1025,6 +1033,24 @@ impl App {
         let start = selection.start;
         self.content.replace_range(selection, text);
         self.editor_cursor = start + text.len();
+        self.editor_selection_anchor = None;
+        self.mark_dirty();
+    }
+
+    fn delete_editor_line(&mut self) {
+        let line_start = self.content[..self.editor_cursor]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let (start, end) = self.content[self.editor_cursor..].find('\n').map_or_else(
+            // The last line has no following separator, so remove the preceding one.
+            || (line_start.saturating_sub(1), self.content.len()),
+            |index| (line_start, self.editor_cursor + index + 1),
+        );
+        if start == end {
+            return;
+        }
+        self.content.drain(start..end);
+        self.editor_cursor = start;
         self.editor_selection_anchor = None;
         self.mark_dirty();
     }
@@ -4768,6 +4794,78 @@ mod tests {
         assert_eq!(app.editor_selection(), Some(0.."héllo  ".len()));
         app.handle_editor_key(right);
         assert_eq!(app.editor_selection(), None);
+    }
+
+    #[test]
+    fn modified_backspace_deletes_words_lines_or_selected_text() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        for (content, cursor, expected, expected_cursor) in [
+            ("héllo wörld", "héllo wörld".len(), "héllo ", "héllo ".len()),
+            ("one two   ", 10, "one ", 4),
+            ("one, two", 4, "one two", 3),
+            ("one\ntwo", 4, "two", 0),
+            ("one two", 5, "one wo", 4),
+            ("cafe\u{301}", "cafe\u{301}".len(), "", 0),
+            ("one", 0, "one", 0),
+            ("", 0, "", 0),
+        ] {
+            app.content = content.into();
+            app.persisted_content.clone_from(&app.content);
+            app.mark_dirty();
+            app.editor_cursor = cursor;
+            app.editor_selection_anchor = Some(cursor);
+            app.handle_editor_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
+            assert_eq!(app.content, expected, "{content:?} at {cursor}");
+            assert_eq!(app.editor_cursor, expected_cursor);
+            assert!(app.editor_selection().is_none());
+            assert_eq!(app.dirty, content != expected);
+        }
+        for (content, cursor, expected, expected_cursor) in [
+            ("one\ntwo\nthree", 5, "one\nthree", 4),
+            ("one\ntwo\nthree", 0, "two\nthree", 0),
+            ("one\ntwo\nthree", 3, "two\nthree", 0),
+            ("one\ntwo\nthree", 9, "one\ntwo", 7),
+            ("one\n", 4, "one", 3),
+            ("one\n\nthree", 4, "one\nthree", 4),
+            ("héllo", 3, "", 0),
+            ("", 0, "", 0),
+        ] {
+            app.content = content.into();
+            app.persisted_content.clone_from(&app.content);
+            app.mark_dirty();
+            app.editor_cursor = cursor;
+            app.editor_selection_anchor = None;
+            app.handle_editor_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+            assert_eq!(app.content, expected, "{content:?} at {cursor}");
+            assert_eq!(app.editor_cursor, expected_cursor);
+            assert_eq!(app.editor_selection_anchor, None);
+            assert_eq!(app.dirty, content != expected);
+        }
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            app.content = "one two\nthree".into();
+            app.editor_cursor = 2;
+            app.editor_selection_anchor = Some(9);
+            app.handle_editor_key(KeyEvent::new(KeyCode::Backspace, modifiers));
+            assert_eq!(app.content, "onhree");
+            assert_eq!(app.editor_cursor, 2);
+            assert_eq!(app.editor_selection_anchor, None);
+        }
+        app.content = "cafe\u{301}".into();
+        app.editor_cursor = app.content.len();
+        app.handle_editor_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.content, "cafe");
+        assert_eq!(app.editor_cursor, 4);
     }
 
     #[test]

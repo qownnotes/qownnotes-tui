@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Markdown list/checklist items and selected lines.
 - Paste clipboard URLs as Markdown links with fetched page titles using
   `Ctrl-Shift-V`, falling back to the URL when the title is unavailable.
+- Delete words with `Ctrl-Backspace` and whole lines with `Alt-Backspace` in
+  the editor; either shortcut deletes selected text when a selection is active.
 
 ## [1.0.0] - 2026-09-28
 

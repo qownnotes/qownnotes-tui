@@ -71,6 +71,8 @@ command writes the completion script to standard output.
 | `PageUp`, `PageDown`      | Move by one page while editing                       |
 | `Ctrl-Home`, `Ctrl-End`   | Move to note start or end while editing              |
 | `Ctrl-Left`, `Ctrl-Right` | Move by word in the viewer or editor                 |
+| `Ctrl-Backspace`          | Delete the previous word while editing               |
+| `Alt-Backspace`           | Delete the whole current line while editing          |
 | `s`                       | Open settings                                        |
 | `R`                       | Rescan the active note folder                        |
 | `?`                       | Show help                                            |

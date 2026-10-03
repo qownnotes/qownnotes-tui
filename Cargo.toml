@@ -20,6 +20,7 @@ percent-encoding = "2.3"
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 regex = "1.11"
 rusqlite = { version = "0.37", features = ["bundled"] }
+scraper = { version = "0.27", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 toml = "0.9"
@@ -27,6 +28,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 trash = "5.2"
 unicode-segmentation = "1.12"
+ureq = { version = "3.4", features = ["charset"] }
 
 [dev-dependencies]
 tempfile = "3.20"

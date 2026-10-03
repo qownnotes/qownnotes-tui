@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Editor indentation with `Tab` and un-indentation with `Shift-Tab`, including
   Markdown list/checklist items and selected lines.
+- Paste clipboard URLs as Markdown links with fetched page titles using
+  `Ctrl-Shift-V`, falling back to the URL when the title is unavailable.
 
 ## [1.0.0] - 2026-09-28
 

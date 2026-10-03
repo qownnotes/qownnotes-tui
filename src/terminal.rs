@@ -1,7 +1,10 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
-    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -21,7 +24,8 @@ impl TerminalGuard {
             stdout,
             EnterAlternateScreen,
             EnableMouseCapture,
-            EnableBracketedPaste
+            EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         ) {
             let _ = restore_terminal();
             return Err(error);
@@ -56,6 +60,7 @@ pub fn restore_terminal() -> io::Result<()> {
         io::stdout(),
         DisableBracketedPaste,
         DisableMouseCapture,
+        PopKeyboardEnhancementFlags,
         LeaveAlternateScreen
     );
     raw_mode.and(alternate_screen)

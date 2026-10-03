@@ -786,9 +786,15 @@ impl App {
             self.reload_note();
             return;
         }
-        if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if matches!(key.code, KeyCode::Char('v' | 'V'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
             if let Some(text) = self.clipboard.text() {
-                self.insert_editor_text(&text);
+                if key.modifiers.contains(KeyModifiers::SHIFT) || key.code == KeyCode::Char('V') {
+                    self.paste_editor_link(&text);
+                } else {
+                    self.insert_editor_text(&text);
+                }
             }
             return;
         }
@@ -1021,6 +1027,19 @@ impl App {
         self.editor_cursor = start + text.len();
         self.editor_selection_anchor = None;
         self.mark_dirty();
+    }
+
+    fn paste_editor_link(&mut self, text: &str) {
+        let Some(url) = crate::url_paste::clipboard_url(text) else {
+            self.insert_editor_text(text);
+            return;
+        };
+        let title = crate::url_paste::fetch_title(url);
+        let link = crate::url_paste::markdown_link(title.as_deref().unwrap_or(url), url);
+        self.insert_editor_text(&link);
+        if let Err(error) = title {
+            self.status = format!("Pasted link using URL as title: {error}");
+        }
     }
 
     fn handle_editor_indent(&mut self, unindent: bool) {
@@ -4314,6 +4333,90 @@ mod tests {
         app.handle_editor_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
         assert_eq!(app.content, "xfirst\nsecond");
         assert!(app.dirty);
+    }
+
+    #[test]
+    fn control_shift_v_pastes_page_title_links_and_replaces_selections() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/page", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            for body in [
+                "<title>Page &amp; title</title>",
+                "<title>Page &amp; title</title>",
+                "<p>No title</p>",
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        for (character, modifiers, title) in [
+            (
+                'v',
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                "Page & title",
+            ),
+            (
+                'V',
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                "Page & title",
+            ),
+            ('V', KeyModifiers::CONTROL, url.as_str()),
+        ] {
+            app.content = "before selected after".into();
+            app.persisted_content.clone_from(&app.content);
+            app.editor_selection_anchor = Some(7);
+            app.editor_cursor = 15;
+            app.clipboard.set_text(url.clone());
+            app.handle_editor_key(KeyEvent::new(KeyCode::Char(character), modifiers));
+            let link = format!("[{title}]({url})");
+            assert_eq!(app.content, format!("before {link} after"));
+            assert_eq!(app.editor_cursor, 7 + link.len());
+            assert_eq!(app.editor_selection_anchor, None);
+            assert!(app.dirty);
+        }
+        assert!(app.status.starts_with("Pasted link using URL as title:"));
+        server.join().unwrap();
+
+        app.content.clear();
+        app.editor_cursor = 0;
+        app.clipboard.set_text("plain text".into());
+        app.handle_editor_key(KeyEvent::new(
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(app.content, "plain text");
     }
 
     #[test]

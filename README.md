@@ -66,6 +66,7 @@ command writes the completion script to standard output.
 | `Ctrl-s`                  | Save the note                                        |
 | `Esc`                     | Leave editor or return to the note list              |
 | `Ctrl-r`                  | Discard edits and reload from disk                   |
+| `Ctrl-Shift-V`            | Paste a URL as a Markdown link with its page title   |
 | `Tab`, `Shift-Tab`        | Indent/un-indent list items or selected editor lines |
 | `PageUp`, `PageDown`      | Move by one page while editing                       |
 | `Ctrl-Home`, `Ctrl-End`   | Move to note start or end while editing              |
@@ -74,6 +75,12 @@ command writes the completion script to standard output.
 | `R`                       | Rescan the active note folder                        |
 | `?`                       | Show help                                            |
 | `q`, `Ctrl-c`             | Quit                                                 |
+
+While editing, `Ctrl-Shift-V` fetches the title of an HTTP(S) URL in the clipboard
+and inserts `[title](url)`, replacing selected text. Fetches follow redirects and
+time out after five seconds; if no title is available, the URL becomes the link
+title. Non-URL clipboard text is pasted normally. Your terminal must forward
+`Ctrl-Shift-V` to the application rather than handle it as its own paste shortcut.
 
 Search terms are case-insensitive and all terms must match; use quotes to search
 for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The

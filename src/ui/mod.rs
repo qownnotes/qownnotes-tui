@@ -487,6 +487,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              PgUp/PgDn   move by one page while editing\n\
              Ctrl-Home/End  first or last editor position\n\
              Ctrl-x/c/v  cut, copy, or paste in editor\n\
+             Ctrl-Shift-V  paste URL with fetched page title\n\
              Esc         leave editor or return to note list\n\
              R           reload active note folder\n\
              ?           toggle this help\n\

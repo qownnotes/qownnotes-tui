@@ -9,6 +9,7 @@ mod notes;
 mod terminal;
 mod theme;
 mod ui;
+mod url_paste;
 
 use std::{fs::OpenOptions, io, panic, sync::Mutex};
 

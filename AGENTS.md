@@ -3,7 +3,7 @@
 ## Project
 
 `qownnotes-tui` is a Rust 2024 terminal application for browsing and editing
-QOwnNotes-compatible note folders. Rust 1.85 is the minimum supported version.
+QOwnNotes-compatible note folders. Rust 1.88 is the minimum supported version.
 
 ## Development
 

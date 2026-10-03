@@ -307,13 +307,12 @@ fn qsettings_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
         let line = line.trim();
         if line.starts_with('[') && line.ends_with(']') {
             in_general = line == "[General]";
-        } else if in_general {
-            if let Some(value) = line
+        } else if in_general
+            && let Some(value) = line
                 .strip_prefix(key)
                 .and_then(|line| line.strip_prefix('='))
-            {
-                return Some(value.trim());
-            }
+        {
+            return Some(value.trim());
         }
     }
     None

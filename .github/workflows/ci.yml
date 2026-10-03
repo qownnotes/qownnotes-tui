@@ -33,11 +33,11 @@ jobs:
         run: cargo test --all-targets
 
   msrv:
-    name: Rust 1.85
+    name: Rust 1.88
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - run: cargo check --locked
 
   nix:

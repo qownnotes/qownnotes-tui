@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Delete words with `Ctrl-Backspace` and whole lines with `Alt-Backspace` in
   the editor; either shortcut deletes selected text when a selection is active.
 
+### Changed
+
+- Raised the minimum supported Rust version from 1.85 to 1.88 and removed
+  compiler-compatibility pins for the HTML parser and note scanner dependencies.
+
 ## [1.0.0] - 2026-09-28
 
 ### Added

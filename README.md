@@ -160,7 +160,7 @@ Run `devenv shell` to enter the development environment, then run `just` to list
 recipes. The main validation command is `just check`; use `just nix-build` for
 the reproducible package and `just flake-check` to validate all flake outputs.
 
-Rust 1.85 is the minimum supported version. The crate uses Rust edition 2024.
+Rust 1.88 is the minimum supported version. The crate uses Rust edition 2024.
 
 ## License
 

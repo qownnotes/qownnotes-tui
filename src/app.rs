@@ -319,10 +319,11 @@ impl App {
                 }
                 self.all_notes = inventory.notes;
                 self.subfolders = inventory.subfolders;
-                if let FolderFilter::Directory(path) = &self.folder_filter {
-                    if !path.as_os_str().is_empty() && !self.subfolders.contains(path) {
-                        self.folder_filter = FolderFilter::AllNotes;
-                    }
+                if let FolderFilter::Directory(path) = &self.folder_filter
+                    && !path.as_os_str().is_empty()
+                    && !self.subfolders.contains(path)
+                {
+                    self.folder_filter = FolderFilter::AllNotes;
                 }
                 self.apply_search();
                 let fallback = match &self.folder_filter {
@@ -1566,10 +1567,10 @@ impl App {
         let Some(row) = self.folder_rows().get(self.selected_folder_row).cloned() else {
             return;
         };
-        if row.has_children {
-            if let FolderEntry::Directory(path) = row.entry {
-                self.expanded_subfolders.insert(path);
-            }
+        if row.has_children
+            && let FolderEntry::Directory(path) = row.entry
+        {
+            self.expanded_subfolders.insert(path);
         }
     }
 
@@ -1593,11 +1594,12 @@ impl App {
         let Some(row) = self.folder_rows().get(self.selected_folder_row).cloned() else {
             return;
         };
-        if let FolderEntry::Directory(path) = &row.entry {
-            if row.has_children && row.expanded {
-                self.expanded_subfolders.remove(path);
-                return;
-            }
+        if let FolderEntry::Directory(path) = &row.entry
+            && row.has_children
+            && row.expanded
+        {
+            self.expanded_subfolders.remove(path);
+            return;
         }
         let parent = match row.entry {
             FolderEntry::AllNotes => FolderEntry::NoteFolder(self.active_folder),
@@ -2209,16 +2211,15 @@ impl App {
             return;
         };
         let renamed = naming::automatic_relative_path(self.root(), &relative, &self.content);
-        if renamed != relative {
-            if let Err(error) = fs::rename(self.root().join(&relative), self.root().join(&renamed))
-            {
-                self.status = format!(
-                    "Unable to rename {} to {}: {error}",
-                    relative.display(),
-                    renamed.display()
-                );
-                return;
-            }
+        if renamed != relative
+            && let Err(error) = fs::rename(self.root().join(&relative), self.root().join(&renamed))
+        {
+            self.status = format!(
+                "Unable to rename {} to {}: {error}",
+                relative.display(),
+                renamed.display()
+            );
+            return;
         }
         let path = self.root().join(&renamed);
         match fs::write(&path, self.content.as_bytes()) {

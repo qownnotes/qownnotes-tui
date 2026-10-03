@@ -2,7 +2,7 @@
 name = "qownnotes-tui"
 version = "1.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "A keyboard-first terminal browser for QOwnNotes-compatible note folders"
 license = "GPL-3.0-only"
 repository = "https://github.com/qownnotes/qownnotes-tui"
@@ -15,7 +15,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 crossterm = { version = "0.29", features = ["osc52"] }
 directories = "6.0"
-ignore = "=0.4.29"
+ignore = "0.4"
 percent-encoding = "2.3"
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 regex = "1.11"

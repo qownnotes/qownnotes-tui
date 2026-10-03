@@ -214,12 +214,11 @@ fn draw_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
             Some(Wrap { trim: false }),
             (app.viewer_scroll, 0),
         );
-        if app.pane == Pane::Viewer {
-            if let Some(position) =
+        if app.pane == Pane::Viewer
+            && let Some(position) =
                 cursor_cell_position(&app.viewer_text_cells, app.viewer_cursor, area)
-            {
-                frame.set_cursor_position(position);
-            }
+        {
+            frame.set_cursor_position(position);
         }
     }
 

@@ -276,16 +276,16 @@ fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
             text = &text[next..];
             continue;
         }
-        if let Some(rest) = text.strip_prefix('`') {
-            if let Some(end) = rest.find('`') {
-                let length = end + 2;
-                spans.push(Span::styled(
-                    text[..length].to_owned(),
-                    Style::default().fg(theme.code.into()),
-                ));
-                text = &text[length..];
-                continue;
-            }
+        if let Some(rest) = text.strip_prefix('`')
+            && let Some(end) = rest.find('`')
+        {
+            let length = end + 2;
+            spans.push(Span::styled(
+                text[..length].to_owned(),
+                Style::default().fg(theme.code.into()),
+            ));
+            text = &text[length..];
+            continue;
         }
         if text.starts_with('[') {
             if let Some(length) = footnote_label_length(text) {
@@ -309,18 +309,18 @@ fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
                 text = &text[length..];
                 continue;
             }
-            if let Some(label_end) = text.find("](") {
-                if let Some(target_end) = text[label_end + 2..].find(')') {
-                    let length = label_end + target_end + 3;
-                    spans.push(Span::styled(
-                        text[..length].to_owned(),
-                        Style::default()
-                            .fg(theme.link.into())
-                            .add_modifier(Modifier::UNDERLINED),
-                    ));
-                    text = &text[length..];
-                    continue;
-                }
+            if let Some(label_end) = text.find("](")
+                && let Some(target_end) = text[label_end + 2..].find(')')
+            {
+                let length = label_end + target_end + 3;
+                spans.push(Span::styled(
+                    text[..length].to_owned(),
+                    Style::default()
+                        .fg(theme.link.into())
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
+                text = &text[length..];
+                continue;
             }
         }
         if let Some(length) = markdown_autolink_length(text) {
@@ -334,21 +334,21 @@ fn highlight_inline(mut text: &str, theme: &Theme) -> Vec<Span<'static>> {
             continue;
         }
         let delimiter = if text.starts_with("**") { "**" } else { "*" };
-        if let Some(rest) = text.strip_prefix(delimiter) {
-            if let Some(end) = rest.find(delimiter) {
-                let length = delimiter.len() + end + delimiter.len();
-                let modifier = if delimiter.len() == 2 {
-                    Modifier::BOLD
-                } else {
-                    Modifier::ITALIC
-                };
-                spans.push(Span::styled(
-                    text[..length].to_owned(),
-                    Style::default().add_modifier(modifier),
-                ));
-                text = &text[length..];
-                continue;
-            }
+        if let Some(rest) = text.strip_prefix(delimiter)
+            && let Some(end) = rest.find(delimiter)
+        {
+            let length = delimiter.len() + end + delimiter.len();
+            let modifier = if delimiter.len() == 2 {
+                Modifier::BOLD
+            } else {
+                Modifier::ITALIC
+            };
+            spans.push(Span::styled(
+                text[..length].to_owned(),
+                Style::default().add_modifier(modifier),
+            ));
+            text = &text[length..];
+            continue;
         }
         let length = text.chars().next().map_or(0, char::len_utf8);
         spans.push(Span::raw(text[..length].to_owned()));
@@ -488,15 +488,15 @@ fn footnote_definitions(source: &str) -> Vec<(String, Range<usize>)> {
         let trimmed = &line[indent..];
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_fence = !in_fence;
-        } else if !in_fence && indent <= 3 {
-            if let Some(length) = footnote_label_length(trimmed) {
-                if trimmed[length..].starts_with(':') {
-                    definitions.push((
-                        trimmed[2..length - 1].to_owned(),
-                        offset + indent..offset + indent + length,
-                    ));
-                }
-            }
+        } else if !in_fence
+            && indent <= 3
+            && let Some(length) = footnote_label_length(trimmed)
+            && trimmed[length..].starts_with(':')
+        {
+            definitions.push((
+                trimmed[2..length - 1].to_owned(),
+                offset + indent..offset + indent + length,
+            ));
         }
         offset += line.len() + 1;
     }

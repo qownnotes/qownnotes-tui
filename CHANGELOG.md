@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pressing Down on the last line moves the cursor to the end of the note in
+  view and edit modes, including Shift-Down selection.
+
 ## [1.1.1] - 2026-10-04
 
 ### Fixed

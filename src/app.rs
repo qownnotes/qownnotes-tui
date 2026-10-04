@@ -2503,7 +2503,7 @@ fn move_vertical(content: &str, cursor: usize, delta: isize) -> usize {
             .map_or(0, |index| index + 1)
     } else {
         let Some(next) = content[cursor..].find('\n') else {
-            return cursor;
+            return content.len();
         };
         cursor + next + 1
     };
@@ -3452,6 +3452,53 @@ mod tests {
                 (cell.column, cell.row),
                 rendered.symbol()
             );
+        }
+    }
+
+    #[test]
+    fn down_on_last_line_moves_to_note_end_in_viewer_and_editor() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+        let mut terminal = Terminal::new(TestBackend::new(90, 10)).unwrap();
+
+        for content in ["first\ncafé last", "single line", "first\n", ""] {
+            app.content = content.into();
+            let start = content.rfind('\n').map_or(0, |index| index + 1);
+            for editing in [false, true] {
+                for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+                    app.editing = editing;
+                    app.editor_cursor = start;
+                    app.viewer_cursor = start;
+                    app.editor_selection_anchor = None;
+                    app.viewer_selection_anchor = None;
+                    terminal
+                        .draw(|frame| crate::ui::draw(frame, &mut app))
+                        .unwrap();
+                    app.handle_key(KeyEvent::new(KeyCode::Down, modifiers), &scan_tx);
+                    let (cursor, selection) = if editing {
+                        (app.editor_cursor, app.editor_selection())
+                    } else {
+                        (app.viewer_cursor, app.viewer_selection())
+                    };
+                    assert_eq!(cursor, content.len(), "{content:?}, editing={editing}");
+                    let expected = (modifiers == KeyModifiers::SHIFT && start < content.len())
+                        .then_some(start..content.len());
+                    assert_eq!(selection, expected);
+                }
+            }
         }
     }
 

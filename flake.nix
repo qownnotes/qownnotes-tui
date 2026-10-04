@@ -23,7 +23,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         package = pkgs.rustPlatform.buildRustPackage {
           pname = "qownnotes-tui";
-          version = "1.1.0";
+          version = "1.1.1";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [

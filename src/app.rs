@@ -3396,7 +3396,13 @@ mod tests {
             let cell = app
                 .viewer_text_cells
                 .iter()
-                .find(|cell| cell.start == app.viewer_cursor);
+                .find(|cell| cell.start == app.viewer_cursor)
+                .or_else(|| {
+                    app.viewer_text_cells
+                        .iter()
+                        .rev()
+                        .find(|cell| cell.end == app.viewer_cursor)
+                });
             assert!(
                 cell.is_some(),
                 "step {step}: cursor {} not visible, scroll {}",
@@ -3404,12 +3410,20 @@ mod tests {
                 app.viewer_scroll
             );
             let cell = cell.unwrap();
+            let column = if cell.start == app.viewer_cursor {
+                cell.column
+            } else {
+                cell.column
+                    .saturating_add(1)
+                    .min(app.viewer_area.right().saturating_sub(2))
+            };
             assert_eq!(
                 terminal.get_cursor_position().unwrap(),
-                Position::new(cell.column, cell.row),
+                Position::new(column, cell.row),
                 "step {step}: caret not on cursor cell"
             );
         }
+        assert_eq!(app.viewer_cursor, app.content.len());
     }
 
     #[test]

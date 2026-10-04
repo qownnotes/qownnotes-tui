@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Convert single-URL terminal pastes into Markdown links with fetched page titles,
+  so `Ctrl-Shift-V` works when the terminal handles the paste shortcut itself.
+
 ## [1.1.0] - 2026-10-03
 
 ### Added

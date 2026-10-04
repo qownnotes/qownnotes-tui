@@ -81,8 +81,10 @@ command writes the completion script to standard output.
 While editing, `Ctrl-Shift-V` fetches the title of an HTTP(S) URL in the clipboard
 and inserts `[title](url)`, replacing selected text. Fetches follow redirects and
 time out after five seconds; if no title is available, the URL becomes the link
-title. Non-URL clipboard text is pasted normally. Your terminal must forward
-`Ctrl-Shift-V` to the application rather than handle it as its own paste shortcut.
+title. Non-URL clipboard text is pasted normally. This also works when your
+terminal handles `Ctrl-Shift-V` as its own paste shortcut: single-URL terminal
+pastes are converted to Markdown links, including pastes from the terminal's
+menu. Use application-handled `Ctrl-v` to paste a URL as plain text.
 
 Search terms are case-insensitive and all terms must match; use quotes to search
 for a phrase. Press `Enter` to keep the filtered list or `Esc` to clear it. The

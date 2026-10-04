@@ -1056,6 +1056,13 @@ impl App {
         self.mark_dirty();
     }
 
+    fn handle_paste(&mut self, text: &str) {
+        if self.editing {
+            // Terminal paste shortcuts send text without the original key modifiers.
+            self.paste_editor_link(&normalize_paste(text));
+        }
+    }
+
     fn paste_editor_link(&mut self, text: &str) {
         let Some(url) = crate::url_paste::clipboard_url(text) else {
             self.insert_editor_text(text);
@@ -2344,8 +2351,7 @@ pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
         match events.next()? {
             Event::Key(key) => app.handle_key(key, &scan_tx),
             Event::Mouse(mouse) => app.handle_mouse(mouse, &scan_tx),
-            Event::Paste(text) if app.editing => app.insert_editor_text(&normalize_paste(&text)),
-            Event::Paste(_) => {}
+            Event::Paste(text) => app.handle_paste(&text),
             Event::ScanFinished((folder, generation, result)) => {
                 app.scan_event_finished(folder, generation, result)
             }
@@ -4363,7 +4369,7 @@ mod tests {
     }
 
     #[test]
-    fn control_shift_v_pastes_page_title_links_and_replaces_selections() {
+    fn shortcut_and_terminal_pastes_create_page_title_links_and_replace_selections() {
         use std::{
             io::{Read, Write},
             net::TcpListener,
@@ -4376,6 +4382,8 @@ mod tests {
             for body in [
                 "<title>Page &amp; title</title>",
                 "<title>Page &amp; title</title>",
+                "<p>No title</p>",
+                "<title>Terminal &amp; title</title>",
                 "<p>No title</p>",
             ] {
                 let (mut stream, _) = listener.accept().unwrap();
@@ -4434,7 +4442,37 @@ mod tests {
             assert!(app.dirty);
         }
         assert!(app.status.starts_with("Pasted link using URL as title:"));
+        app.editing = true;
+        // Terminal paste uses the event payload, not the application's clipboard.
+        app.clipboard.set_text("unrelated clipboard text".into());
+        for title in ["Terminal & title", url.as_str()] {
+            app.content = "before selected after".into();
+            app.persisted_content.clone_from(&app.content);
+            app.editor_selection_anchor = Some(7);
+            app.editor_cursor = 15;
+            app.handle_paste(&format!(" {url}\r\n"));
+            let link = format!("[{title}]({url})");
+            assert_eq!(app.content, format!("before {link} after"));
+            assert_eq!(app.editor_cursor, 7 + link.len());
+            assert_eq!(app.editor_selection_anchor, None);
+            assert!(app.dirty);
+        }
+        assert!(app.status.starts_with("Pasted link using URL as title:"));
         server.join().unwrap();
+
+        app.content.clear();
+        app.editor_cursor = 0;
+        app.handle_paste(&format!("{url}\r\nplain text"));
+        assert_eq!(app.content, format!("{url}\nplain text"));
+        app.editing = false;
+        app.handle_paste("ignored outside the editor");
+        assert_eq!(app.content, format!("{url}\nplain text"));
+
+        app.content.clear();
+        app.editor_cursor = 0;
+        app.clipboard.set_text(url.clone());
+        app.handle_editor_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert_eq!(app.content, url);
 
         app.content.clear();
         app.editor_cursor = 0;

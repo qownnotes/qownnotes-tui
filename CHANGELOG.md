@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pressing Enter at the start of a Markdown list item or just after its marker
+  creates an empty item before it, preserving indentation and checklist style.
+
 ### Changed
 
 - Pressing Down on the last line moves the cursor to the end of the note in

@@ -1144,10 +1144,7 @@ impl App {
     }
 
     fn handle_editor_enter(&mut self) {
-        let text_after_cursor = &self.content[self.editor_cursor..];
-        if self.editor_selection().is_some()
-            || (!text_after_cursor.is_empty() && !text_after_cursor.starts_with('\n'))
-        {
+        if self.editor_selection().is_some() {
             self.insert_editor_text("\n");
             return;
         }
@@ -1155,7 +1152,10 @@ impl App {
         let line_start = self.content[..self.editor_cursor]
             .rfind('\n')
             .map_or(0, |start| start + 1);
-        let line = &self.content[line_start..self.editor_cursor];
+        let line_end = self.content[self.editor_cursor..]
+            .find('\n')
+            .map_or(self.content.len(), |end| self.editor_cursor + end);
+        let line = &self.content[line_start..line_end];
         let Some(marker_end) = crate::markdown::list_marker_end(line) else {
             self.insert_editor_text("\n");
             return;
@@ -1163,6 +1163,23 @@ impl App {
         let indent_end = line.len() - line.trim_start().len();
         let checkbox_end = crate::markdown::checkbox_marker_end(&line[marker_end..]);
         let text_start = marker_end + checkbox_end.unwrap_or(0);
+        let text_start =
+            text_start + line[text_start..].len() - line[text_start..].trim_start().len();
+
+        if self.editor_cursor <= line_start + text_start && !line[text_start..].trim().is_empty() {
+            let checkbox = checkbox_end.map_or("", |_| "[ ] ");
+            let prefix = format!("{}{checkbox}", &line[..marker_end]);
+            let insertion = format!("{prefix}\n");
+            self.editor_cursor = line_start;
+            self.insert_editor_text(&insertion);
+            self.editor_cursor = line_start + prefix.len();
+            return;
+        }
+
+        if self.editor_cursor != line_end {
+            self.insert_editor_text("\n");
+            return;
+        }
 
         if line[text_start..].trim().is_empty() {
             self.content
@@ -4378,6 +4395,61 @@ mod tests {
             assert_eq!(app.content, expected);
             assert_eq!(app.editor_cursor, expected.len());
             assert!(app.dirty);
+        }
+    }
+
+    #[test]
+    fn enter_creates_list_items_before_existing_items() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+
+        for (line, prefix, text_start) in [
+            ("- café", "- ", 2),
+            ("    * nested", "    * ", 6),
+            ("+ item", "+ ", 2),
+            ("9. item", "9. ", 3),
+            ("  - [x] done", "  - [ ] ", 8),
+            ("\t- [ ] todo", "\t- [ ] ", 7),
+        ] {
+            for before in ["", "previous\n"] {
+                for offset in [0, text_start] {
+                    app.content = format!("{before}{line}\nnext");
+                    app.persisted_content.clone_from(&app.content);
+                    app.editor_cursor = before.len() + offset;
+                    app.editor_selection_anchor = None;
+
+                    app.handle_editor_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+                    assert_eq!(app.content, format!("{before}{prefix}\n{line}\nnext"));
+                    assert_eq!(app.editor_cursor, before.len() + prefix.len());
+                    assert!(app.dirty);
+                    app.handle_editor_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+                    assert_eq!(app.content, format!("{before}{prefix}a\n{line}\nnext"));
+                }
+            }
+        }
+
+        // A selection still gets replaced, and ordinary text gets a plain newline.
+        for (content, cursor, anchor, expected) in [
+            ("- item", 2, Some(0), "\nitem"),
+            ("plain text", 0, None, "\nplain text"),
+            ("- item", 4, None, "- it\nem"),
+        ] {
+            app.content = content.into();
+            app.editor_cursor = cursor;
+            app.editor_selection_anchor = anchor;
+            app.handle_editor_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert_eq!(app.content, expected);
         }
     }
 

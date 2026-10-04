@@ -2496,7 +2496,7 @@ fn move_vertical(content: &str, cursor: usize, delta: isize) -> usize {
     let column = content[line_start..cursor].chars().count();
     let target_start = if delta < 0 {
         if line_start == 0 {
-            return cursor;
+            return 0;
         }
         content[..line_start - 1]
             .rfind('\n')
@@ -3496,6 +3496,53 @@ mod tests {
                     assert_eq!(cursor, content.len(), "{content:?}, editing={editing}");
                     let expected = (modifiers == KeyModifiers::SHIFT && start < content.len())
                         .then_some(start..content.len());
+                    assert_eq!(selection, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn up_on_first_line_moves_to_note_start_in_viewer_and_editor() {
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: "/notes".into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.current_note = Some("note.md".into());
+        app.pane = Pane::Viewer;
+        let (scan_tx, _scan_rx) = mpsc::channel();
+        let mut terminal = Terminal::new(TestBackend::new(90, 10)).unwrap();
+
+        for content in ["café first\nlast", "single line", "\nlast", ""] {
+            app.content = content.into();
+            let start = content.find('\n').unwrap_or(content.len());
+            for editing in [false, true] {
+                for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+                    app.editing = editing;
+                    app.editor_cursor = start;
+                    app.viewer_cursor = start;
+                    app.editor_selection_anchor = None;
+                    app.viewer_selection_anchor = None;
+                    terminal
+                        .draw(|frame| crate::ui::draw(frame, &mut app))
+                        .unwrap();
+                    app.handle_key(KeyEvent::new(KeyCode::Up, modifiers), &scan_tx);
+                    let (cursor, selection) = if editing {
+                        (app.editor_cursor, app.editor_selection())
+                    } else {
+                        (app.viewer_cursor, app.viewer_selection())
+                    };
+                    assert_eq!(cursor, 0, "{content:?}, editing={editing}");
+                    let expected =
+                        (modifiers == KeyModifiers::SHIFT && start > 0).then_some(0..start);
                     assert_eq!(selection, expected);
                 }
             }

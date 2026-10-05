@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-05
+
 ### Added
 
 - Open the current note in an external editor with `E` or `Ctrl-e`, using
@@ -222,7 +224,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reserved `.git`, `media`, `attachments`, and `trash` directories are excluded
   from note discovery.
 
-[Unreleased]: https://github.com/qownnotes/qownnotes-tui/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/qownnotes/qownnotes-tui/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/qownnotes/qownnotes-tui/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/qownnotes/qownnotes-tui/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/qownnotes/qownnotes-tui/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/qownnotes/qownnotes-tui/compare/v1.0.0...v1.1.0

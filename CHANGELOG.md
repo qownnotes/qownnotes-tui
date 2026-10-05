@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-05
+
 ### Added
 
 - Pressing Enter at the start of a Markdown list item or just after its marker
@@ -210,7 +212,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reserved `.git`, `media`, `attachments`, and `trash` directories are excluded
   from note discovery.
 
-[Unreleased]: https://github.com/qownnotes/qownnotes-tui/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/qownnotes/qownnotes-tui/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/qownnotes/qownnotes-tui/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/qownnotes/qownnotes-tui/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/qownnotes/qownnotes-tui/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/qownnotes/qownnotes-tui/compare/v0.9.0...v1.0.0

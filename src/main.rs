@@ -4,6 +4,7 @@ mod clipboard;
 mod config;
 mod error;
 mod event;
+mod external_editor;
 mod markdown;
 mod notes;
 mod terminal;

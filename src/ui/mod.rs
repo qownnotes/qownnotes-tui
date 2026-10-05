@@ -435,9 +435,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let help = if app.loading {
         " scanning "
     } else if app.editing {
-        " Ctrl-f find  F3 next  Shift-F3 previous  Ctrl-Space toggle  Ctrl-s save  Esc close "
+        " Ctrl-f find  F3 next  Ctrl-e external editor  Ctrl-s save  Esc close "
     } else if matches!(app.pane, Pane::Notes | Pane::Viewer) {
-        " n new  d delete  / or Ctrl-f search  F3 next  e edit  j/k scroll  ? help  q quit "
+        " n new  d delete  / or Ctrl-f search  e edit  E external editor  j/k scroll  ? help  q quit "
     } else {
         " Enter filter  Left/Right tree  s settings  R reload  ? help  q quit "
     };
@@ -457,7 +457,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(58, 30, frame.area());
+    let area = centered_rect(58, 31, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
@@ -479,6 +479,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              n / Ctrl-n  create a timestamped note\n\
              d           delete the selected note\n\
              e           edit the selected note\n\
+             E / Ctrl-e  open note in external editor\n\
              s           open settings\n\
              Ctrl-s      save while editing\n\
              Ctrl-r      discard edits and reload from disk\n\

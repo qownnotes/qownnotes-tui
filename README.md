@@ -60,6 +60,7 @@ command writes the completion script to standard output.
 | `n`, `Ctrl-n`             | Create a timestamped note                            |
 | `d`                       | Delete a note after confirmation                     |
 | `e`                       | Edit the selected note                               |
+| `E`, `Ctrl-e`             | Open the current note in an external editor          |
 | `/`, `Ctrl-f`             | Search notes or find text in the viewer              |
 | `Ctrl-f`                  | Find text while editing                              |
 | `F3`, `Shift-F3`          | Select the next or previous in-note match            |
@@ -77,6 +78,14 @@ command writes the completion script to standard output.
 | `R`                       | Rescan the active note folder                        |
 | `?`                       | Show help                                            |
 | `q`, `Ctrl-c`             | Quit                                                 |
+
+Press `E` in the note list or viewer, or `Ctrl-e` (also while editing), to open
+the current note in `$VISUAL`, then `$EDITOR`, falling back to `vi` when neither
+is set. Editor commands can include arguments and quoted paths, for example
+`EDITOR='emacs -nw'` or `VISUAL='code --wait'`. Commands are executed directly
+without shell expansion. The app saves local edits before launching, waits for
+the editor to exit, then restores the terminal and reloads the note. Save errors
+or conflicting external edits prevent launching the editor.
 
 While editing, `Ctrl-Shift-V` fetches the title of an HTTP(S) URL in the clipboard
 and inserts `[title](url)`, replacing selected text. Fetches follow redirects and

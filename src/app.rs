@@ -24,6 +24,7 @@ use crate::{
     config::{self, Config, NoteFolder, NoteSort},
     error::NoteReadError,
     event::{Event, Events, ScanResult},
+    external_editor,
     markdown::{NoteLink, NoteLinkTarget},
     notes::{model::Note, naming, scan},
     terminal::TerminalGuard,
@@ -141,6 +142,7 @@ pub struct App {
     external_conflict: bool,
     save_interval: Duration,
     should_quit: bool,
+    external_editor_requested: bool,
     clipboard: Clipboard,
     mouse_selection: Option<MouseSelectionTarget>,
     mouse_selection_origin: Option<(u16, u16)>,
@@ -212,6 +214,7 @@ impl App {
             external_conflict: false,
             save_interval: Duration::from_secs(config.save_interval_seconds.max(1)),
             should_quit: false,
+            external_editor_requested: false,
             clipboard: Clipboard::new(),
             mouse_selection: None,
             mouse_selection_origin: None,
@@ -406,6 +409,10 @@ impl App {
             self.handle_note_search_key(key);
             return;
         }
+        if key.code == KeyCode::Char('e') && key.modifiers == KeyModifiers::CONTROL {
+            self.external_editor_requested = self.current_note.is_some();
+            return;
+        }
         let starts_search = (key.code == KeyCode::Char('/') && !self.editing)
             || (key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL));
         if starts_search
@@ -513,6 +520,9 @@ impl App {
                     && self.current_note.is_some() =>
             {
                 self.start_editing();
+            }
+            KeyCode::Char('E') if matches!(self.pane, Pane::Notes | Pane::Viewer) => {
+                self.external_editor_requested = self.current_note.is_some();
             }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
@@ -2305,9 +2315,55 @@ impl App {
             .unwrap_or_else(|| self.selected_note.min(self.notes.len().saturating_sub(1)));
     }
 
-    fn reload_note(&mut self) {
+    fn prepare_external_editor(&mut self) -> Option<Command> {
+        self.save_note();
+        if self.dirty {
+            return None;
+        }
+        let relative = self.current_note.as_ref()?;
+        // Absolute paths also prevent filenames starting with '-' becoming options.
+        let result = self
+            .root()
+            .join(relative)
+            .canonicalize()
+            .context("cannot access note for external editing")
+            .and_then(|path| external_editor::command(&path));
+        match result {
+            Ok(command) => Some(command),
+            Err(error) => {
+                self.status = format!("Unable to open external editor: {error:#}");
+                None
+            }
+        }
+    }
+
+    fn edit_externally(&mut self, terminal: &mut TerminalGuard) -> std::io::Result<()> {
+        let Some(mut command) = self.prepare_external_editor() else {
+            return Ok(());
+        };
+        let result = terminal.with_suspended(|| command.status())?;
+        self.external_editor_finished(result);
+        Ok(())
+    }
+
+    fn external_editor_finished(&mut self, result: std::io::Result<std::process::ExitStatus>) {
+        // Even a failing editor may have written changes before exiting.
+        let reloaded = self.reload_note();
+        if reloaded && let Some(relative) = self.current_note.clone() {
+            self.invalidate_scans();
+            self.update_note_after_save(&relative, &relative);
+            self.status = format!("Reloaded {} after external editing", relative.display());
+        }
+        match result {
+            Ok(status) if status.success() => {}
+            Ok(status) => self.status = format!("External editor exited with {status}"),
+            Err(error) => self.status = format!("Unable to run external editor: {error}"),
+        }
+    }
+
+    fn reload_note(&mut self) -> bool {
         let Some(relative) = self.current_note.clone() else {
-            return;
+            return false;
         };
         match read_note(self.root(), &relative) {
             Ok(content) => {
@@ -2321,8 +2377,12 @@ impl App {
                 self.external_conflict = false;
                 self.update_note_search();
                 self.status = format!("Reloaded {}; local edits discarded", relative.display());
+                true
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
         }
     }
 
@@ -2374,6 +2434,9 @@ pub fn run(mut terminal: TerminalGuard, config: Config) -> anyhow::Result<()> {
             }
             Event::Tick => app.tick(),
             Event::Resize => {}
+        }
+        if std::mem::take(&mut app.external_editor_requested) {
+            app.edit_externally(&mut terminal)?;
         }
     }
     config::selected_note(app.root(), app.current_note.as_deref())
@@ -5085,6 +5148,69 @@ mod tests {
         app.handle_editor_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         assert_eq!(app.content, "cafe");
         assert_eq!(app.editor_cursor, 4);
+    }
+
+    #[test]
+    fn external_editing_saves_renamed_note_blocks_conflicts_and_reloads_changes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "original").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.scan_finished(0, Ok(scan::scan(root.path()).unwrap()));
+        app.load_selected_note();
+        let (tx, _rx) = mpsc::channel();
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT), &tx);
+        assert!(std::mem::take(&mut app.external_editor_requested));
+        app.start_editing();
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT), &tx);
+        assert!(!app.external_editor_requested);
+        app.handle_key(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &tx,
+        );
+        assert!(app.external_editor_requested);
+
+        app.content = "# Renamed\nlocal edits".into();
+        app.mark_dirty();
+        let command = app.prepare_external_editor().unwrap();
+        let path = root.path().join("Renamed.md");
+        assert_eq!(
+            command.get_args().last(),
+            Some(path.canonicalize().unwrap().as_os_str())
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), app.content);
+        assert!(!app.dirty);
+
+        app.content.push_str(" more local edits");
+        app.mark_dirty();
+        fs::write(&path, "external edits").unwrap();
+        assert!(app.prepare_external_editor().is_none());
+        assert!(app.dirty);
+        assert!(app.external_conflict);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external edits");
+
+        app.reload_note();
+        fs::write(&path, "changed by editor").unwrap();
+        app.external_editor_finished(Err(std::io::Error::other("editor failed")));
+        assert_eq!(app.content, "changed by editor");
+        assert_eq!(app.persisted_content, app.content);
+        assert!(!app.dirty);
+        assert_eq!(app.all_notes[0].size, app.content.len() as u64);
+        assert_eq!(
+            &*app.all_notes[0].search_text_lowercase,
+            "changed by editor"
+        );
+        assert!(app.status.contains("editor failed"));
     }
 
     #[test]

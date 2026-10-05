@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Open the current note in an external editor with `E` or `Ctrl-e`, using
+  `$VISUAL`, `$EDITOR`, or `vi`, saving local edits before launch and reloading
+  the note after the editor exits ([#2](https://github.com/qownnotes/qownnotes-tui/issues/2)).
+
 ## [1.2.0] - 2026-10-05
 
 ### Added

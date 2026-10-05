@@ -1,6 +1,7 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
+    cursor::Show,
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -14,6 +15,7 @@ pub type AppTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 pub struct TerminalGuard {
     terminal: AppTerminal,
+    active: bool,
 }
 
 impl TerminalGuard {
@@ -31,7 +33,10 @@ impl TerminalGuard {
             return Err(error);
         }
         match Terminal::new(CrosstermBackend::new(stdout)) {
-            Ok(terminal) => Ok(Self { terminal }),
+            Ok(terminal) => Ok(Self {
+                terminal,
+                active: true,
+            }),
             Err(error) => {
                 let _ = restore_terminal();
                 Err(error)
@@ -45,12 +50,24 @@ impl TerminalGuard {
     {
         self.terminal.draw(render).map(|_| ())
     }
+
+    pub fn with_suspended<T>(&mut self, action: impl FnOnce() -> T) -> io::Result<T> {
+        self.active = false;
+        restore_terminal()?;
+        let result = action();
+        // The inactive guard can be replaced without restoring the resumed terminal.
+        *self = Self::enter()?;
+        self.terminal.clear()?;
+        Ok(result)
+    }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = restore_terminal();
-        let _ = self.terminal.show_cursor();
+        if self.active {
+            let _ = restore_terminal();
+            let _ = self.terminal.show_cursor();
+        }
     }
 }
 
@@ -61,7 +78,8 @@ pub fn restore_terminal() -> io::Result<()> {
         DisableBracketedPaste,
         DisableMouseCapture,
         PopKeyboardEnhancementFlags,
-        LeaveAlternateScreen
+        LeaveAlternateScreen,
+        Show
     );
     raw_mode.and(alternate_screen)
 }

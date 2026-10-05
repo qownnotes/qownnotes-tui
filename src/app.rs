@@ -74,6 +74,24 @@ enum MouseSelectionTarget {
     Editor,
 }
 
+/// Maximum number of undo steps kept for the loaded note.
+const UNDO_LIMIT: usize = 200;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EditSnapshot {
+    content: String,
+    cursor: usize,
+    selection_anchor: Option<usize>,
+}
+
+/// Consecutive edits of a compatible group are undone together.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EditGroup {
+    Word,
+    Space,
+    Deletion,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NoteHistoryEntry {
     path: PathBuf,
@@ -136,6 +154,10 @@ pub struct App {
     note_history: Vec<NoteHistoryEntry>,
     note_history_index: Option<usize>,
     remembered_note: Option<PathBuf>,
+    undo_stack: Vec<EditSnapshot>,
+    redo_stack: Vec<EditSnapshot>,
+    edit_group: Option<EditGroup>,
+    edit_generation: u64,
     persisted_content: String,
     dirty: bool,
     dirty_since: Option<Instant>,
@@ -208,6 +230,10 @@ impl App {
             note_history: Vec::new(),
             note_history_index: None,
             remembered_note: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            edit_group: None,
+            edit_generation: 0,
             persisted_content: String::new(),
             dirty: false,
             dirty_since: None,
@@ -369,6 +395,110 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        let group = self.edit_group_for(key);
+        self.record_edit(group, |app| app.handle_key_press(key, scans));
+    }
+
+    fn edit_group_for(&self, key: KeyEvent) -> Option<EditGroup> {
+        if !self.editing || self.editor_selection().is_some() {
+            return None;
+        }
+        match key.code {
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                Some(if character.is_whitespace() {
+                    EditGroup::Space
+                } else {
+                    EditGroup::Word
+                })
+            }
+            KeyCode::Backspace | KeyCode::Delete if key.modifiers.is_empty() => {
+                Some(EditGroup::Deletion)
+            }
+            _ => None,
+        }
+    }
+
+    /// Runs an action and records the previous note state as an undo step if
+    /// the action changed the note content.
+    fn record_edit(&mut self, group: Option<EditGroup>, action: impl FnOnce(&mut Self)) -> bool {
+        let generation = self.edit_generation;
+        let before = self.edit_snapshot();
+        action(self);
+        // Undo, redo, and note reloads manage the history themselves.
+        if self.edit_generation != generation || self.content == before.content {
+            self.edit_group = None;
+            return false;
+        }
+        let continues = matches!(
+            (self.edit_group, group),
+            (Some(EditGroup::Word), Some(EditGroup::Word))
+                | (
+                    Some(EditGroup::Space),
+                    Some(EditGroup::Space | EditGroup::Word)
+                )
+                | (Some(EditGroup::Deletion), Some(EditGroup::Deletion))
+        );
+        if !continues {
+            self.undo_stack.push(before);
+            if self.undo_stack.len() > UNDO_LIMIT {
+                self.undo_stack.remove(0);
+            }
+        }
+        self.redo_stack.clear();
+        self.edit_group = group;
+        true
+    }
+
+    fn edit_snapshot(&self) -> EditSnapshot {
+        EditSnapshot {
+            content: self.content.clone(),
+            cursor: self.editor_cursor,
+            selection_anchor: self.editor_selection_anchor,
+        }
+    }
+
+    fn reset_edit_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.edit_group = None;
+        self.edit_generation += 1;
+    }
+
+    fn undo_edit(&mut self, redo: bool) {
+        let snapshot = if redo {
+            self.redo_stack.pop()
+        } else {
+            self.undo_stack.pop()
+        };
+        let Some(snapshot) = snapshot else {
+            self.status = if redo {
+                "Nothing to redo"
+            } else {
+                "Nothing to undo"
+            }
+            .into();
+            return;
+        };
+        let current = self.edit_snapshot();
+        if redo {
+            self.undo_stack.push(current);
+        } else {
+            self.redo_stack.push(current);
+        }
+        self.content = snapshot.content;
+        self.editor_cursor = snapshot.cursor;
+        self.editor_selection_anchor = snapshot.selection_anchor;
+        self.edit_group = None;
+        self.edit_generation += 1;
+        self.mark_dirty();
+        self.status = if redo { "Redo" } else { "Undo" }.into();
+    }
+
+    fn handle_key_press(&mut self, key: KeyEvent, scans: &Sender<ScanResult>) {
         if self.show_help {
             self.show_help = false;
             return;
@@ -728,7 +858,7 @@ impl App {
         if self.notes.is_empty() {
             self.capture_note_position();
             self.content.clear();
-            self.clear_text_selection();
+            self.reset_note_state();
             self.persisted_content.clear();
             self.current_note = None;
             self.viewer_scroll = 0;
@@ -774,6 +904,18 @@ impl App {
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Terminals report Ctrl-Shift-Z as either `z` with Shift or `Z`.
+            let redo = match key.code {
+                KeyCode::Char('z') => Some(key.modifiers.contains(KeyModifiers::SHIFT)),
+                KeyCode::Char('Z' | 'y') => Some(true),
+                _ => None,
+            };
+            if let Some(redo) = redo {
+                self.undo_edit(redo);
+                return;
+            }
+        }
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.save_note();
             return;
@@ -1069,7 +1211,7 @@ impl App {
     fn handle_paste(&mut self, text: &str) {
         if self.editing {
             // Terminal paste shortcuts send text without the original key modifiers.
-            self.paste_editor_link(&normalize_paste(text));
+            self.record_edit(None, |app| app.paste_editor_link(&normalize_paste(text)));
         }
     }
 
@@ -1314,7 +1456,9 @@ impl App {
             )
     }
 
-    fn clear_text_selection(&mut self) {
+    /// Resets per-note text state after the note content was replaced.
+    fn reset_note_state(&mut self) {
+        self.reset_edit_history();
         self.editor_selection_anchor = None;
         self.viewer_cursor = 0;
         self.viewer_selection_anchor = None;
@@ -1329,6 +1473,15 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, scans: &Sender<ScanResult>) {
+        let group = self.edit_group;
+        let changed = self.record_edit(None, |app| app.handle_mouse_event(mouse, scans));
+        // Pointer motion does not interrupt the current typing group.
+        if !changed && mouse.kind == MouseEventKind::Moved {
+            self.edit_group = group;
+        }
+    }
+
+    fn handle_mouse_event(&mut self, mouse: MouseEvent, scans: &Sender<ScanResult>) {
         if self.show_settings || self.confirm_delete {
             return;
         }
@@ -1565,7 +1718,7 @@ impl App {
                     self.all_notes.clear();
                     self.notes.clear();
                     self.content.clear();
-                    self.clear_text_selection();
+                    self.reset_note_state();
                     self.current_note = None;
                     self.viewer_scroll = 0;
                     self.note_history.clear();
@@ -1669,7 +1822,7 @@ impl App {
             match read_note(self.root(), &path) {
                 Ok(content) => {
                     self.content = content.clone();
-                    self.clear_text_selection();
+                    self.reset_note_state();
                     self.persisted_content = content;
                     self.current_note = Some(path.clone());
                     self.dirty = false;
@@ -1690,7 +1843,7 @@ impl App {
                 }
                 Err(error) => {
                     self.content.clear();
-                    self.clear_text_selection();
+                    self.reset_note_state();
                     self.current_note = None;
                     self.status = error.to_string();
                 }
@@ -1782,7 +1935,7 @@ impl App {
         match read_note(self.root(), &entry.path) {
             Ok(content) => {
                 self.content = content.clone();
-                self.clear_text_selection();
+                self.reset_note_state();
                 self.persisted_content = content;
                 self.current_note = Some(entry.path.clone());
                 self.dirty = false;
@@ -2178,7 +2331,7 @@ impl App {
         self.selected_note = self.selected_note.min(self.notes.len().saturating_sub(1));
         if self.notes.is_empty() {
             self.content.clear();
-            self.clear_text_selection();
+            self.reset_note_state();
             self.persisted_content.clear();
             self.current_note = None;
             self.viewer_scroll = 0;
@@ -2213,7 +2366,7 @@ impl App {
                         "Note changed outside the app; Esc cannot save until resolved".into();
                 } else {
                     self.content = disk_content.clone();
-                    self.clear_text_selection();
+                    self.reset_note_state();
                     self.persisted_content = disk_content;
                     self.update_search_text(&relative);
                     self.editor_cursor = self.editor_cursor.min(self.content.len());
@@ -2368,7 +2521,7 @@ impl App {
         match read_note(self.root(), &relative) {
             Ok(content) => {
                 self.content = content.clone();
-                self.clear_text_selection();
+                self.reset_note_state();
                 self.persisted_content = content;
                 self.update_search_text(&relative);
                 self.editor_cursor = self.content.len();
@@ -4381,6 +4534,90 @@ mod tests {
         assert!(!root.path().join("note.md").exists());
         assert_eq!(app.current_note.as_deref(), Some(Path::new("content!.md")));
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn undo_and_redo_editor_changes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "one").unwrap();
+        let mut app = App::new(Config {
+            note_folders: vec![NoteFolder {
+                name: "Notes".into(),
+                path: root.path().into(),
+                show_subfolders: true,
+            }],
+            active_folder: 0,
+            note_sort: NoteSort::LastModified,
+            save_interval_seconds: 10,
+            theme: Theme::default(),
+            ignored_subfolder_patterns: Vec::new(),
+        });
+        app.notes.push(Note {
+            relative_path: "note.md".into(),
+            size: 3,
+            modified: SystemTime::UNIX_EPOCH,
+            search_text_lowercase: "one".into(),
+        });
+        app.load_selected_note();
+        app.pane = Pane::Viewer;
+        app.editing = true;
+        app.editor_cursor = app.content.len();
+        let (tx, _rx) = mpsc::channel();
+        let press = |app: &mut App, code, modifiers| {
+            app.handle_key(KeyEvent::new(code, modifiers), &tx);
+        };
+        let undo = KeyModifiers::CONTROL;
+        let redo = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+
+        for character in " two three".chars() {
+            press(&mut app, KeyCode::Char(character), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(app.content, "one two thr");
+
+        press(&mut app, KeyCode::Char('z'), undo);
+        assert_eq!(app.content, "one two three");
+        press(&mut app, KeyCode::Char('z'), undo);
+        assert_eq!(app.content, "one two");
+        assert_eq!(app.editor_cursor, "one two".len());
+        press(&mut app, KeyCode::Char('z'), undo);
+        assert_eq!(app.content, "one");
+        assert!(!app.dirty);
+        press(&mut app, KeyCode::Char('z'), undo);
+        assert_eq!(app.status, "Nothing to undo");
+
+        press(&mut app, KeyCode::Char('z'), redo);
+        assert_eq!(app.content, "one two");
+        press(&mut app, KeyCode::Char('Z'), redo);
+        assert_eq!(app.content, "one two three");
+        assert!(app.dirty);
+
+        // A new edit discards the redo history.
+        press(&mut app, KeyCode::Char('z'), undo);
+        press(&mut app, KeyCode::Left, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('!'), KeyModifiers::NONE);
+        assert_eq!(app.content, "one tw!o");
+        press(&mut app, KeyCode::Char('z'), redo);
+        assert_eq!(app.status, "Nothing to redo");
+        assert_eq!(app.content, "one tw!o");
+
+        // Pastes and selection replacements are separate undo steps.
+        app.handle_paste("X");
+        app.editor_selection_anchor = Some(0);
+        press(&mut app, KeyCode::Char('A'), KeyModifiers::NONE);
+        assert_eq!(app.content, "Ao");
+        press(&mut app, KeyCode::Char('z'), undo);
+        assert_eq!(app.content, "one tw!Xo");
+        assert_eq!(app.editor_selection(), Some(0..8));
+        press(&mut app, KeyCode::Char('z'), undo);
+        assert_eq!(app.content, "one tw!o");
+
+        // Reloading the note clears the history.
+        press(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(app.content, "one");
+        press(&mut app, KeyCode::Char('z'), undo);
+        assert_eq!(app.content, "one");
     }
 
     #[test]

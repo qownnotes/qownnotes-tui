@@ -68,6 +68,8 @@ command writes the completion script to standard output.
 | `Esc`                     | Leave editor or return to the note list              |
 | `Ctrl-r`                  | Discard edits and reload from disk                   |
 | `Ctrl-Shift-V`            | Paste a URL as a Markdown link with its page title   |
+| `Ctrl-z`                  | Undo the last edit while editing                     |
+| `Ctrl-Shift-Z`, `Ctrl-y`  | Redo the last undone edit while editing              |
 | `Tab`, `Shift-Tab`        | Indent/un-indent list items or selected editor lines |
 | `PageUp`, `PageDown`      | Move by one page while editing                       |
 | `Ctrl-Home`, `Ctrl-End`   | Move to note start or end while editing              |

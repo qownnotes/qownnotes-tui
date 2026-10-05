@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Open the current note in an external editor with `E` or `Ctrl-e`, using
   `$VISUAL`, `$EDITOR`, or `vi`, saving local edits before launch and reloading
   the note after the editor exits ([#2](https://github.com/qownnotes/qownnotes-tui/issues/2)).
+- Undo and redo edits in the note editor with `Ctrl-z` and `Ctrl-Shift-Z`
+  (or `Ctrl-y`). Typed words and consecutive deletions are undone together,
+  and the history is cleared when another note is loaded or the note is
+  reloaded from disk.
 
 ## [1.2.0] - 2026-10-05
 

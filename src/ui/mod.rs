@@ -457,7 +457,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(58, 31, frame.area());
+    let area = centered_rect(58, 36, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
@@ -489,6 +489,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
              Ctrl-Backspace  delete previous word in editor\n\
              Alt-Backspace   delete whole line in editor\n\
              Ctrl-x/c/v  cut, copy, or paste in editor\n\
+             Ctrl-z/Ctrl-Shift-Z  undo or redo in editor\n\
              Ctrl-Shift-V  paste URL with fetched page title\n\
              Esc         leave editor or return to note list\n\
              R           reload active note folder\n\

@@ -392,7 +392,13 @@ fn fill_blank_rows(source: &str, area: Rect, rows: &mut [(u16, Vec<TextCell>)]) 
             previous_end = Some(last.end);
             continue;
         }
-        let Some(offset) = previous_end.map(|end: usize| end + 1) else {
+        let Some(offset) = previous_end.map(|end: usize| {
+            end + if source[end..].starts_with("\r\n") {
+                2
+            } else {
+                1
+            }
+        }) else {
             continue;
         };
         if offset > source.len() {
@@ -413,7 +419,14 @@ fn fill_blank_rows(source: &str, area: Rect, rows: &mut [(u16, Vec<TextCell>)]) 
             next_start = Some(first.start);
             continue;
         }
-        let Some(offset) = next_start.and_then(|start: usize| start.checked_sub(1)) else {
+        let Some(offset) = next_start.and_then(|start: usize| {
+            let newline = start.checked_sub(1)?;
+            Some(if source[..newline].ends_with('\r') {
+                newline - 1
+            } else {
+                newline
+            })
+        }) else {
             continue;
         };
         cells.push(TextCell {
@@ -685,5 +698,66 @@ mod tests {
         assert_eq!(blank_offsets, [6, 7]);
         assert_eq!(cells.first().map(|cell| cell.start), Some(0));
         assert_eq!(cells.last().map(|cell| cell.end), Some(content.len()));
+    }
+
+    #[test]
+    fn crlf_text_cells_keep_blank_line_and_link_positions() {
+        let content = "\r\n\r\nfirst\r\n\r\n\r\n[last](target.md)\r\n";
+        let area = Rect::new(0, 0, 30, 12);
+        let cells = text_cells(content, area, Some(Wrap { trim: false }), (0, 0));
+        let blank_offsets = cells
+            .iter()
+            .filter(|cell| cell.start == cell.end)
+            .map(|cell| cell.start)
+            .collect::<Vec<_>>();
+        assert_eq!(blank_offsets, [0, 2, 11, 13, content.len()]);
+        for cell in cells.iter().filter(|cell| cell.start != cell.end) {
+            assert!(!content[cell.start..cell.end].contains('\r'));
+        }
+        let link_start = content.find("[last]").unwrap();
+        assert!(
+            cells
+                .iter()
+                .any(|cell| cell.start == link_start && cell.row == 6)
+        );
+    }
+
+    #[test]
+    fn switching_to_crlf_note_does_not_emit_cursor_moving_controls() {
+        use ratatui::{Terminal, backend::CrosstermBackend};
+
+        let mut output = Vec::new();
+        let backend = CrosstermBackend::new(&mut output);
+        let mut terminal = Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(Rect::new(0, 0, 30, 8)),
+            },
+        )
+        .unwrap();
+        for source in [
+            "# A much longer previous title\nprevious body\nmore previous text",
+            "Title\r\n=====\r\n\r\nnew\tbody\r\n",
+        ] {
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(
+                        Paragraph::new(markdown::highlight(source, &Theme::default()))
+                            .block(Block::default().borders(Borders::ALL))
+                            .wrap(Wrap { trim: false }),
+                        frame.area(),
+                    );
+                })
+                .unwrap();
+        }
+        drop(terminal);
+        assert!(
+            !output.contains(&b'\r'),
+            "carriage return would move the terminal cursor"
+        );
+        assert!(
+            !output.contains(&b'\t'),
+            "tab would move the terminal cursor"
+        );
     }
 }

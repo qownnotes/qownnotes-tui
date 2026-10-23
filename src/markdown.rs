@@ -26,7 +26,10 @@ pub struct NoteLink {
 pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
     let mut in_fence = false;
     let mut previous_is_setext_title = false;
-    let source_lines = source.split('\n').collect::<Vec<_>>();
+    let source_lines = source
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect::<Vec<_>>();
     let lines = source_lines
         .iter()
         .enumerate()
@@ -107,7 +110,36 @@ pub fn highlight(source: &str, theme: &Theme) -> Text<'static> {
             Line::from(highlight_inline(line, theme))
         })
         .collect::<Vec<_>>();
-    Text::from(lines)
+    terminal_safe_text(Text::from(lines))
+}
+
+// Control characters must not reach the terminal backend: a carriage return or
+// tab moves its cursor without updating Ratatui's cell positions. Replacing ASCII
+// controls with spaces preserves source byte offsets and the one-cell layout.
+fn terminal_safe_text(mut text: Text<'static>) -> Text<'static> {
+    for line in &mut text.lines {
+        for span in &mut line.spans {
+            if span
+                .content
+                .chars()
+                .any(|character| character.is_ascii_control())
+            {
+                span.content = span
+                    .content
+                    .chars()
+                    .map(|character| {
+                        if character.is_ascii_control() {
+                            ' '
+                        } else {
+                            character
+                        }
+                    })
+                    .collect::<String>()
+                    .into();
+            }
+        }
+    }
+    text
 }
 
 fn is_setext_title(line: &str) -> bool {
@@ -151,7 +183,9 @@ pub fn highlight_selection(
     let lines = highlighted
         .lines
         .into_iter()
-        .map(|line| {
+        .zip(source.split('\n'))
+        .map(|(line, source_line)| {
+            let next_line_offset = source_offset + source_line.len() + 1;
             let line_style = line.style;
             let mut spans = Vec::new();
             for span in line.spans {
@@ -175,7 +209,7 @@ pub fn highlight_selection(
                 }
                 source_offset = span_end;
             }
-            source_offset += 1;
+            source_offset = next_line_offset;
             Line::from(spans)
         })
         .collect::<Vec<_>>();
@@ -187,7 +221,8 @@ pub fn selection_metadata(source: &str) -> Text<'static> {
     let lines = source
         .split('\n')
         .map(|line| {
-            let spans = line
+            let visible_line = line.strip_suffix('\r').unwrap_or(line);
+            let spans = visible_line
                 .grapheme_indices(true)
                 .filter_map(|(offset, grapheme)| {
                     let start = line_offset + offset;
@@ -204,7 +239,7 @@ pub fn selection_metadata(source: &str) -> Text<'static> {
             Line::from(spans)
         })
         .collect::<Vec<_>>();
-    Text::from(lines)
+    terminal_safe_text(Text::from(lines))
 }
 
 pub fn decode_source_offset(color: Color) -> Option<usize> {
@@ -580,7 +615,8 @@ pub fn link_metadata(source: &str, links: &[NoteLink]) -> Text<'static> {
     let mut lines = Vec::new();
     let mut line_start = 0;
     for line in source.split('\n') {
-        let line_end = line_start + line.len();
+        let next_line_start = line_start + line.len() + 1;
+        let line_end = line_start + line.strip_suffix('\r').unwrap_or(line).len();
         let mut spans = Vec::new();
         let mut position = line_start;
         for (index, link) in links.iter().enumerate() {
@@ -600,9 +636,9 @@ pub fn link_metadata(source: &str, links: &[NoteLink]) -> Text<'static> {
             spans.push(Span::raw(source[position..line_end].to_owned()));
         }
         lines.push(Line::from(spans));
-        line_start = line_end + 1;
+        line_start = next_line_start;
     }
-    Text::from(lines)
+    terminal_safe_text(Text::from(lines))
 }
 
 fn link_id_color(index: usize) -> Color {
@@ -692,6 +728,58 @@ mod tests {
             assert_eq!(line.style.fg, Some(Color::Cyan));
             assert!(line.style.add_modifier.contains(Modifier::BOLD));
         }
+    }
+
+    #[test]
+    fn crlf_highlighting_and_link_layout_match_lf() {
+        let source = "Title\n=====\n\n- [note](target.md)\n```\ncode\n```\n";
+        let windows_source = source.replace('\n', "\r\n");
+        let theme = Theme::default();
+
+        assert_eq!(
+            highlight(&windows_source, &theme),
+            highlight(source, &theme)
+        );
+        assert_eq!(
+            link_metadata(&windows_source, &note_links(&windows_source)),
+            link_metadata(source, &note_links(source))
+        );
+    }
+
+    #[test]
+    fn crlf_selections_and_metadata_keep_original_byte_offsets() {
+        let source = "Title\r\n=====\r\n\r\nnext [note](target.md)";
+        let start = source.find("next").unwrap();
+        let text = highlight_selection(source, &Theme::default(), Some(start..start + 4));
+        let selected = text
+            .lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .filter(|span| span.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(selected, "next");
+
+        let metadata = selection_metadata(source);
+        assert!(metadata.lines[2].spans.is_empty());
+        let first = &metadata.lines[3].spans[0];
+        assert_eq!(decode_source_offset(first.style.fg.unwrap()), Some(start));
+        assert_eq!(
+            decode_source_offset(first.style.bg.unwrap()),
+            Some(start + 1)
+        );
+    }
+
+    #[test]
+    fn ascii_controls_are_displayed_as_spaces_without_changing_offsets() {
+        let source = "a\tb\rc\x1bd\x08e\0f";
+        let expected = "a b c d e f";
+        let theme = Theme::default();
+        assert_eq!(highlight(source, &theme), highlight(expected, &theme));
+        assert_eq!(selection_metadata(source), selection_metadata(expected));
+        assert_eq!(link_metadata(source, &[]), link_metadata(expected, &[]));
+        let selected = highlight_selection(source, &theme, Some(2..5));
+        assert_eq!(selected.lines[0].spans[1].content, "b c");
     }
 
     #[test]

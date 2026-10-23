@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevent Windows-style line endings and embedded ASCII control characters from
+  disrupting viewer/editor rendering and leaving text from previous notes visible
+  ([#3](https://github.com/qownnotes/qownnotes-tui/issues/3)).
+
 ## [1.3.0] - 2026-10-05
 
 ### Added

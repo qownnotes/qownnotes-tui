@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Update `rustls`, `rustls-webpki`, and `webpki-roots` to address six security
+  advisories in the HTTPS dependencies.
+
 ## [1.3.1] - 2026-10-23
 
 ### Fixed

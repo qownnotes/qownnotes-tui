@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Declare SQLite and pkg-config build dependencies so the Nix package links
+  successfully with current nixpkgs Rust build hooks.
+
 ## [1.3.2] - 2026-10-23
 
 ### Security

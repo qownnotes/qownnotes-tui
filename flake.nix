@@ -34,7 +34,11 @@
           };
           cargoLock.lockFile = ./Cargo.lock;
           strictDeps = true;
-          nativeBuildInputs = [ pkgs.installShellFiles ];
+          nativeBuildInputs = [
+            pkgs.installShellFiles
+            pkgs.pkg-config
+          ];
+          buildInputs = [ pkgs.sqlite ];
           postInstall = ''
             installShellCompletion --cmd qownnotes-tui \
               --bash <($out/bin/qownnotes-tui --generate-completion bash) \

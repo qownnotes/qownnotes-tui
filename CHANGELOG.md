@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Update `rusqlite` and bundled SQLite to address RUSTSEC-2026-0459
   (CVE-2026-119375), preventing memory disclosure from crafted database/WAL files.
+- Update Ratatui and its `lru` dependency to address RUSTSEC-2026-0002 and
+  RUSTSEC-2026-0253 and remove the unmaintained `paste` dependency.
 
 ## [1.3.3] - 2026-11-09
 

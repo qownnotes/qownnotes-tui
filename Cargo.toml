@@ -17,7 +17,7 @@ crossterm = { version = "0.29", features = ["osc52"] }
 directories = "6.0"
 ignore = "0.4"
 percent-encoding = "2.3"
-ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color", "unstable-rendered-line-info"] }
 regex = "1.11"
 rusqlite = { version = "0.41", features = ["bundled"] }
 scraper = { version = "0.27", default-features = false }

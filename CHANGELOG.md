@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Raise the minimum supported Rust version from 1.88 to 1.89 for the updated
+  SQLite dependency.
+
+### Security
+
+- Update `rusqlite` and bundled SQLite to address RUSTSEC-2026-0459
+  (CVE-2026-119375), preventing memory disclosure from crafted database/WAL files.
+
 ## [1.3.3] - 2026-11-09
 
 ### Fixed
